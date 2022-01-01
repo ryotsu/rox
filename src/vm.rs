@@ -1,4 +1,5 @@
 use super::chunk::{Chunk, OpCode};
+use super::compiler::compile;
 use super::value::Value;
 
 #[cfg(feature = "debug_trace_execution")]
@@ -75,10 +76,10 @@ impl VM {
         self.push(a / b);
     }
 
-    pub fn interpret(&mut self, chunk: Chunk) -> InterpretResult {
-        self.chunk = chunk;
+    pub fn interpret(&mut self, source: &str) {
+        compile(source);
         self.ip = 0;
-        self.run()
+        //self.run()
     }
 
     fn run(&mut self) -> InterpretResult {
