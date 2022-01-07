@@ -73,7 +73,11 @@ impl<'a> Scanner<'a> {
     fn make_token(&self, token_type: TokenType) -> Option<Token<'a>> {
         Some(Token {
             ttype: token_type,
-            value: &self.text[self.start..self.current],
+            value: if token_type == TokenType::String {
+                &self.text[self.start + 1..self.current - 1]
+            } else {
+                &self.text[self.start..self.current]
+            },
             line: self.line,
         })
     }

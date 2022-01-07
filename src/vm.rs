@@ -2,6 +2,8 @@ use super::chunk::{Chunk, OpCode};
 use super::compiler::Parser;
 use super::value::Value;
 
+use std::mem;
+
 #[cfg(feature = "debug_trace_execution")]
 use super::debug;
 
@@ -27,10 +29,12 @@ macro_rules! binary_op {
             let a = $self.pop();
 
             let value = match (a, b) {
-                (Value::Number(a), Value::Number(b)) => Value::Number(a $op b),
+                (Value::Number(a), Value::Number(b)) => (a $op b).into(),
+                (Value::String(a), Value::String(b)) => {
+                    (String::with_capacity(a.len() + b.len()) + &a + &b).into()
+                }
                 _ => {
-
-                    $self.runtime_error("Operands must be numbers.");
+                    $self.runtime_error("Operation not supported on the given operands.");
                     return InterpretResult::RuntimeError;
                 }
             };
@@ -45,7 +49,7 @@ macro_rules! binary_cmp {
         {
             let b = $self.pop();
             let a = $self.pop();
-            $self.push(Value::Bool(a $op b));
+            $self.push((a $op b).into());
         }
     };
 }
@@ -55,7 +59,7 @@ impl VM {
         Self {
             chunk: Chunk::new(),
             ip: 0,
-            stack: [Value::Nil; STACK_MAX],
+            stack: unsafe { mem::zeroed() },
             stack_top: 0,
         }
     }
@@ -67,7 +71,7 @@ impl VM {
 
     fn read_constant(&mut self) -> Value {
         let index = self.read_byte() as usize;
-        self.chunk.constants[index]
+        mem::take(&mut self.chunk.constants[index])
     }
 
     fn push(&mut self, value: Value) {
@@ -77,7 +81,7 @@ impl VM {
 
     fn pop(&mut self) -> Value {
         self.stack_top -= 1;
-        self.stack[self.stack_top]
+        mem::take(&mut self.stack[self.stack_top])
     }
 
     fn peek(&mut self, distance: usize) -> &Value {
@@ -106,7 +110,6 @@ impl VM {
 
     fn run(&mut self) -> InterpretResult {
         use OpCode::*;
-        use Value::*;
 
         loop {
             #[cfg(feature = "debug_trace_execution")]
@@ -126,13 +129,13 @@ impl VM {
                     let constant = self.read_constant();
                     self.push(constant);
                 }
-                OpNil => self.push(Nil),
-                OpTrue => self.push(Bool(true)),
-                OpFalse => self.push(Bool(false)),
+                OpNil => self.push(Value::Nil),
+                OpTrue => self.push(true.into()),
+                OpFalse => self.push(false.into()),
                 OpEqual => {
                     let b = self.pop();
                     let a = self.pop();
-                    self.push(Bool(a == b));
+                    self.push((a == b).into());
                 }
                 OpGreater => binary_cmp!(self, >),
                 OpLess => binary_cmp!(self, <),
@@ -142,11 +145,11 @@ impl VM {
                 OpDivide => binary_op!(self, /),
                 OpNot => {
                     let value = self.pop().is_falsey();
-                    self.push(Bool(!value))
+                    self.push((!value).into())
                 }
                 OpNegate => {
-                    if let Number(value) = self.pop() {
-                        self.push(Number(-value))
+                    if let Value::Number(value) = self.pop() {
+                        self.push((-value).into())
                     } else {
                         self.runtime_error("Operand must be a number.");
                         return InterpretResult::RuntimeError;

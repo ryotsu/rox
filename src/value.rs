@@ -1,11 +1,12 @@
 use std::fmt::Display;
-use std::ops::{Add, Div, Mul, Sub};
+use std::rc::Rc;
 
-#[derive(PartialEq, PartialOrd, Copy, Clone)]
+#[derive(PartialEq, PartialOrd, Clone)]
 pub enum Value {
     Nil,
     Bool(bool),
     Number(f64),
+    String(Rc<String>),
 }
 
 impl Value {
@@ -22,6 +23,7 @@ impl Display for Value {
             Nil => write!(f, "nil"),
             Bool(val) => write!(f, "{}", val),
             Number(val) => write!(f, "{}", val),
+            String(val) => write!(f, "{}", val),
         }
     }
 }
@@ -32,24 +34,26 @@ impl Default for Value {
     }
 }
 
-macro_rules! impl_ops {
-    ($interface:ident, $func:ident, $op:tt) => {
-        impl $interface for Value {
-            type Output = Value;
-
-            fn $func(self, rhs: Value) -> Self::Output {
-                use Value::*;
-
-                match (self, rhs) {
-                    (Number(a), Number(b)) => Number(a $op b),
-                    _ => unreachable!("The operation on given operands is not defined."),
-                }
-            }
-        }
-    };
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Self::Bool(b)
+    }
 }
 
-impl_ops!(Add, add, +);
-impl_ops!(Sub, sub, -);
-impl_ops!(Mul, mul, *);
-impl_ops!(Div, div, /);
+impl From<f64> for Value {
+    fn from(n: f64) -> Self {
+        Self::Number(n)
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Self::String(Rc::new(s))
+    }
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Self::String(Rc::new(String::from(s)))
+    }
+}

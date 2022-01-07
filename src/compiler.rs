@@ -112,7 +112,11 @@ impl<'a> Parser<'a> {
 
     fn number(&mut self) {
         let value: f64 = self.previous.value.parse().unwrap();
-        self.emit_constant(Value::Number(value));
+        self.emit_constant(value.into());
+    }
+
+    fn string(&mut self) {
+        self.emit_constant(self.previous.value.into())
     }
 
     fn unary(&mut self) {
@@ -274,7 +278,7 @@ impl<'a> ParseRule<'a> {
             TokenType::Less => Self::new(None, Some(Parser::binary), Precedence::Comparison),
             TokenType::LessEqual => Self::new(None, Some(Parser::binary), Precedence::Comparison),
             TokenType::Identifier => Self::new(None, None, Precedence::None),
-            TokenType::String => Self::new(None, None, Precedence::None),
+            TokenType::String => Self::new(Some(Parser::string), None, Precedence::None),
             TokenType::Number => Self::new(Some(Parser::number), None, Precedence::None),
             TokenType::And => Self::new(None, None, Precedence::And),
             TokenType::Class => Self::new(None, None, Precedence::None),
