@@ -41,11 +41,11 @@ impl Chunk {
         self.lines.push(line);
     }
 
-    pub fn write_constant(&mut self, value: Value, line: u32) -> u8 {
+    pub fn write_constant(&mut self, value: Value, line: u32) -> usize {
         self.constants.push(value);
         self.write(OpCode::OpConstant, line);
-        let index = self.constants.len() as u8 - 1;
-        self.write(index, line);
+        let index = self.constants.len() - 1;
+        self.write(index as u8, line);
         index
     }
 

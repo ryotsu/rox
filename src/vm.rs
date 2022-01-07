@@ -1,5 +1,5 @@
 use super::chunk::{Chunk, OpCode};
-use super::compiler::compile;
+use super::compiler::Parser;
 use super::value::Value;
 
 #[cfg(feature = "debug_trace_execution")]
@@ -77,9 +77,12 @@ impl VM {
     }
 
     pub fn interpret(&mut self, source: &str) {
-        compile(source);
+        let mut chunk = Chunk::new();
+        Parser::compile(source, &mut chunk);
+        self.chunk = chunk;
+
         self.ip = 0;
-        //self.run()
+        self.run();
     }
 
     fn run(&mut self) -> InterpretResult {

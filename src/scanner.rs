@@ -237,8 +237,19 @@ pub enum TokenType {
     Eof,
 }
 
+#[derive(Clone)]
 pub struct Token<'a> {
     pub ttype: TokenType,
     pub value: &'a str,
     pub line: u32,
+}
+
+impl<'a> Default for Token<'a> {
+    fn default() -> Self {
+        Token {
+            ttype: TokenType::Error,
+            value: "",
+            line: 0,
+        }
+    }
 }
