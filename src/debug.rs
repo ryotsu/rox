@@ -22,13 +22,20 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
 
     let instruction = chunk.code[offset];
     match instruction {
-        OpReturn => simple_instruction("OP_RETURN", offset),
+        OpConstant => constant_instruction("OP_CONSTANT", chunk, offset),
+        OpNil => simple_instruction("OP_NIL", offset),
+        OpTrue => simple_instruction("OP_TRUE", offset),
+        OpFalse => simple_instruction("OP_FALSE", offset),
+        OpEqual => simple_instruction("OP_EQUAL", offset),
+        OpGreater => simple_instruction("OP_GREATER", offset),
+        OpLess => simple_instruction("OP_LESS", offset),
         OpAdd => simple_instruction("OP_ADD", offset),
         OpSubtract => simple_instruction("OP_SUBTRACT", offset),
         OpMultiply => simple_instruction("OP_MULTIPLY", offset),
         OpDivide => simple_instruction("OP_DIVIDE", offset),
+        OpNot => simple_instruction("OP_NOT", offset),
         OpNegate => simple_instruction("OP_NEGATE", offset),
-        OpConstant => constant_instruction("OP_CONSTANT", chunk, offset),
+        OpReturn => simple_instruction("OP_RETURN", offset),
     }
 }
 

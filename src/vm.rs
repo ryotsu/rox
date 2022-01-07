@@ -20,12 +20,42 @@ pub enum InterpretResult {
     RuntimeError,
 }
 
+macro_rules! binary_op {
+    ($self:ident, $op:tt) => {
+        {
+            let b = $self.pop();
+            let a = $self.pop();
+
+            let value = match (a, b) {
+                (Value::Number(a), Value::Number(b)) => Value::Number(a $op b),
+                _ => {
+
+                    $self.runtime_error("Operands must be numbers.");
+                    return InterpretResult::RuntimeError;
+                }
+            };
+
+            $self.push(value);
+        }
+    };
+}
+
+macro_rules! binary_cmp {
+    ($self:ident, $op:tt) => {
+        {
+            let b = $self.pop();
+            let a = $self.pop();
+            $self.push(Value::Bool(a $op b));
+        }
+    };
+}
+
 impl VM {
     pub fn new() -> Self {
         Self {
             chunk: Chunk::new(),
             ip: 0,
-            stack: [0.; STACK_MAX],
+            stack: [Value::Nil; STACK_MAX],
             stack_top: 0,
         }
     }
@@ -50,30 +80,19 @@ impl VM {
         self.stack[self.stack_top]
     }
 
-    fn get_operands(&mut self) -> (Value, Value) {
-        let b = self.pop();
-        let a = self.pop();
-        (a, b)
+    fn peek(&mut self, distance: usize) -> &Value {
+        &self.stack[self.stack_top - 1 - distance]
     }
 
-    fn add(&mut self) {
-        let (a, b) = self.get_operands();
-        self.push(a + b);
+    fn reset_stack(&mut self) {
+        self.stack_top = 0;
     }
 
-    fn subtract(&mut self) {
-        let (a, b) = self.get_operands();
-        self.push(a - b);
-    }
+    fn runtime_error(&mut self, message: &str) {
+        eprintln!("{}", message);
 
-    fn multiply(&mut self) {
-        let (a, b) = self.get_operands();
-        self.push(a * b);
-    }
-
-    fn divide(&mut self) {
-        let (a, b) = self.get_operands();
-        self.push(a / b);
+        eprintln!("[line {}] in script", self.chunk.lines[self.ip - 1]);
+        self.reset_stack();
     }
 
     pub fn interpret(&mut self, source: &str) {
@@ -87,6 +106,7 @@ impl VM {
 
     fn run(&mut self) -> InterpretResult {
         use OpCode::*;
+        use Value::*;
 
         loop {
             #[cfg(feature = "debug_trace_execution")]
@@ -106,13 +126,31 @@ impl VM {
                     let constant = self.read_constant();
                     self.push(constant);
                 }
-                OpAdd => self.add(),
-                OpSubtract => self.subtract(),
-                OpMultiply => self.multiply(),
-                OpDivide => self.divide(),
+                OpNil => self.push(Nil),
+                OpTrue => self.push(Bool(true)),
+                OpFalse => self.push(Bool(false)),
+                OpEqual => {
+                    let b = self.pop();
+                    let a = self.pop();
+                    self.push(Bool(a == b));
+                }
+                OpGreater => binary_cmp!(self, >),
+                OpLess => binary_cmp!(self, <),
+                OpAdd => binary_op!(self, +),
+                OpSubtract => binary_op!(self, -),
+                OpMultiply => binary_op!(self, *),
+                OpDivide => binary_op!(self, /),
+                OpNot => {
+                    let value = self.pop().is_falsey();
+                    self.push(Bool(!value))
+                }
                 OpNegate => {
-                    let value = self.pop();
-                    self.push(-value);
+                    if let Number(value) = self.pop() {
+                        self.push(Number(-value))
+                    } else {
+                        self.runtime_error("Operand must be a number.");
+                        return InterpretResult::RuntimeError;
+                    }
                 }
                 OpReturn => {
                     println!("{}", self.pop());

@@ -4,7 +4,7 @@ use crate::value::Value;
 use super::chunk::Chunk;
 use super::scanner::{Scanner, Token, TokenType};
 
-//#[cfg(debug_print_code)]
+#[cfg(debug_print_code)]
 use super::debug;
 
 use std::mem;
@@ -68,7 +68,7 @@ impl<'a> Parser<'a> {
     }
 
     fn current_chunk(&mut self) -> &mut Chunk {
-        &mut self.compiler.chunk
+        self.compiler.chunk
     }
 
     fn emit_byte(&mut self, op_code: OpCode) {
@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
     fn end_compiler(&mut self) {
         self.emit_return();
 
-        //#[cfg(debug_print_code)]
+        #[cfg(debug_print_code)]
         if !self.had_error {
             debug::disassemble_chunk(&self.current_chunk(), "code");
         }
@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
 
     fn number(&mut self) {
         let value: f64 = self.previous.value.parse().unwrap();
-        self.emit_constant(value);
+        self.emit_constant(Value::Number(value));
     }
 
     fn unary(&mut self) {
@@ -121,23 +121,42 @@ impl<'a> Parser<'a> {
         self.parse_precedence(Precedence::Unary);
 
         match op {
+            TokenType::Bang => self.emit_byte(OpCode::OpNot),
             TokenType::Minus => self.emit_byte(OpCode::OpNegate),
-            _ => (),
+            _ => unreachable!(),
         }
     }
 
     fn binary(&mut self) {
+        use OpCode::*;
+        use TokenType::*;
+
         let op = self.previous.ttype;
 
         let rule = ParseRule::get_rule(op);
         self.parse_precedence(rule.precedence + 1);
 
         match op {
-            TokenType::Plus => self.emit_byte(OpCode::OpAdd),
-            TokenType::Minus => self.emit_byte(OpCode::OpSubtract),
-            TokenType::Star => self.emit_byte(OpCode::OpMultiply),
-            TokenType::Slash => self.emit_byte(OpCode::OpDivide),
-            _ => (),
+            BangEqual => self.emit_bytes(OpEqual, OpNot),
+            EqualEqual => self.emit_byte(OpEqual),
+            Greater => self.emit_byte(OpGreater),
+            GreaterEqual => self.emit_bytes(OpLess, OpNot),
+            Less => self.emit_byte(OpLess),
+            LessEqual => self.emit_bytes(OpGreater, OpNot),
+            Plus => self.emit_byte(OpAdd),
+            Minus => self.emit_byte(OpSubtract),
+            Star => self.emit_byte(OpMultiply),
+            Slash => self.emit_byte(OpDivide),
+            _ => unreachable!(),
+        }
+    }
+
+    fn literal(&mut self) {
+        match self.previous.ttype {
+            TokenType::False => self.emit_byte(OpCode::OpFalse),
+            TokenType::Nil => self.emit_byte(OpCode::OpNil),
+            TokenType::True => self.emit_byte(OpCode::OpTrue),
+            _ => unreachable!(),
         }
     }
 
@@ -260,17 +279,17 @@ impl<'a> ParseRule<'a> {
             TokenType::And => Self::new(None, None, Precedence::And),
             TokenType::Class => Self::new(None, None, Precedence::None),
             TokenType::Else => Self::new(None, None, Precedence::None),
-            TokenType::False => Self::new(None, None, Precedence::None),
+            TokenType::False => Self::new(Some(Parser::literal), None, Precedence::None),
             TokenType::For => Self::new(None, None, Precedence::None),
             TokenType::Fun => Self::new(None, None, Precedence::None),
             TokenType::If => Self::new(None, None, Precedence::None),
-            TokenType::Nil => Self::new(None, None, Precedence::None),
+            TokenType::Nil => Self::new(Some(Parser::literal), None, Precedence::None),
             TokenType::Or => Self::new(None, None, Precedence::Or),
             TokenType::Print => Self::new(None, None, Precedence::None),
             TokenType::Return => Self::new(None, None, Precedence::None),
             TokenType::Super => Self::new(None, None, Precedence::None),
             TokenType::This => Self::new(None, None, Precedence::None),
-            TokenType::True => Self::new(None, None, Precedence::None),
+            TokenType::True => Self::new(Some(Parser::literal), None, Precedence::None),
             TokenType::Var => Self::new(None, None, Precedence::None),
             TokenType::While => Self::new(None, None, Precedence::None),
             TokenType::Error => Self::new(None, None, Precedence::None),
