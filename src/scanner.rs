@@ -72,7 +72,7 @@ impl<'a> Scanner<'a> {
 
     fn make_token(&self, token_type: TokenType) -> Option<Token<'a>> {
         Some(Token {
-            ttype: token_type,
+            kind: token_type,
             value: if token_type == TokenType::String {
                 &self.text[self.start + 1..self.current - 1]
             } else {
@@ -93,7 +93,7 @@ impl<'a> Scanner<'a> {
 
     fn error_token(&self, message: &'a str) -> Option<Token<'a>> {
         Some(Token {
-            ttype: TokenType::Error,
+            kind: TokenType::Error,
             line: self.line,
             value: message,
         })
@@ -243,7 +243,7 @@ pub enum TokenType {
 
 #[derive(Clone)]
 pub struct Token<'a> {
-    pub ttype: TokenType,
+    pub kind: TokenType,
     pub value: &'a str,
     pub line: u32,
 }
@@ -251,7 +251,7 @@ pub struct Token<'a> {
 impl<'a> Default for Token<'a> {
     fn default() -> Self {
         Token {
-            ttype: TokenType::Error,
+            kind: TokenType::Error,
             value: "",
             line: 0,
         }

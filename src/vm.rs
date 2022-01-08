@@ -1,7 +1,9 @@
 use super::chunk::{Chunk, OpCode};
 use super::compiler::Parser;
+use super::table::Table;
 use super::value::Value;
 
+use std::collections::hash_map::Entry;
 use std::mem;
 
 #[cfg(feature = "debug_trace_execution")]
@@ -14,6 +16,7 @@ pub struct VM {
     ip: usize,
     stack: [Value; STACK_MAX],
     stack_top: usize,
+    globals: Table,
 }
 
 pub enum InterpretResult {
@@ -61,6 +64,7 @@ impl VM {
             ip: 0,
             stack: unsafe { mem::zeroed() },
             stack_top: 0,
+            globals: Table::new(),
         }
     }
 
@@ -132,6 +136,36 @@ impl VM {
                 OpNil => self.push(Value::Nil),
                 OpTrue => self.push(true.into()),
                 OpFalse => self.push(false.into()),
+                OpPop => {
+                    self.pop();
+                }
+                OpGetGlobal => {
+                    let name: String = self.read_constant().into();
+                    let value = match self.globals.get(&name) {
+                        Some(value) => value.clone(),
+                        None => {
+                            self.runtime_error(&format!("Undefined variable {}", name));
+                            return InterpretResult::RuntimeError;
+                        }
+                    };
+
+                    self.push(value);
+                }
+                OpDefineGlobal => {
+                    let name = self.read_constant().into();
+                    let value = self.pop();
+                    self.globals.insert(name, value);
+                }
+                OpSetGlobal => {
+                    let name: String = self.read_constant().into();
+                    let value = self.peek(0).clone();
+                    if let Entry::Occupied(mut e) = self.globals.entry(name.clone()) {
+                        e.insert(value);
+                    } else {
+                        self.runtime_error(&format!("Undefined variable {}", name));
+                        return InterpretResult::RuntimeError;
+                    }
+                }
                 OpEqual => {
                     let b = self.pop();
                     let a = self.pop();
@@ -155,8 +189,9 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
+                OpPrint => println!("{}", self.pop()),
                 OpReturn => {
-                    println!("{}", self.pop());
+                    //println!("{}", self.pop());
                     return InterpretResult::Ok;
                 }
             }

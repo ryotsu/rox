@@ -10,6 +10,10 @@ pub enum OpCode {
     OpNil,
     OpTrue,
     OpFalse,
+    OpPop,
+    OpGetGlobal,
+    OpDefineGlobal,
+    OpSetGlobal,
     OpEqual,
     OpGreater,
     OpLess,
@@ -19,6 +23,7 @@ pub enum OpCode {
     OpDivide,
     OpNot,
     OpNegate,
+    OpPrint,
     OpReturn,
 }
 
@@ -48,10 +53,14 @@ impl Chunk {
         self.lines.push(line);
     }
 
-    pub fn write_constant(&mut self, value: Value, line: u32) -> usize {
+    pub fn add_constant(&mut self, value: Value) -> usize {
         self.constants.push(value);
+        self.constants.len() - 1
+    }
+
+    pub fn write_constant(&mut self, value: Value, line: u32) -> usize {
+        let index = self.add_constant(value);
         self.write(OpCode::OpConstant, line);
-        let index = self.constants.len() - 1;
         self.write(index as u8, line);
         index
     }

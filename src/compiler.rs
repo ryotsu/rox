@@ -40,8 +40,11 @@ impl<'a> Parser<'a> {
         };
 
         parser.advance();
-        parser.expression();
-        parser.consume(TokenType::Eof, "Expect end of expression");
+
+        while !parser.check_advance(TokenType::Eof) {
+            parser.declaration();
+        }
+
         parser.end_compiler();
     }
 
@@ -50,7 +53,7 @@ impl<'a> Parser<'a> {
 
         while let Some(token) = self.scanner.next() {
             self.current = token;
-            if self.current.ttype != TokenType::Error {
+            if self.current.kind != TokenType::Error {
                 break;
             }
 
@@ -58,8 +61,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume(&mut self, ttype: TokenType, message: &str) {
-        if self.current.ttype == ttype {
+    fn consume(&mut self, kind: TokenType, message: &str) {
+        if self.current.kind == kind {
             self.advance();
             return;
         }
@@ -67,16 +70,29 @@ impl<'a> Parser<'a> {
         self.error_at_current(message);
     }
 
+    fn check(&mut self, kind: TokenType) -> bool {
+        self.current.kind == kind
+    }
+
+    fn check_advance(&mut self, kind: TokenType) -> bool {
+        if !self.check(kind) {
+            return false;
+        }
+
+        self.advance();
+        true
+    }
+
     fn current_chunk(&mut self) -> &mut Chunk {
         self.compiler.chunk
     }
 
-    fn emit_byte(&mut self, op_code: OpCode) {
+    fn emit_byte<T: Into<OpCode>>(&mut self, op_code: T) {
         let line = self.previous.line;
         self.current_chunk().write(op_code, line)
     }
 
-    fn emit_bytes(&mut self, op_code1: OpCode, op_code2: OpCode) {
+    fn emit_bytes<T: Into<OpCode>, U: Into<OpCode>>(&mut self, op_code1: T, op_code2: U) {
         self.emit_byte(op_code1);
         self.emit_byte(op_code2);
     }
@@ -86,10 +102,18 @@ impl<'a> Parser<'a> {
     }
 
     fn emit_constant(&mut self, value: Value) {
-        let line = self.previous.line;
-        if self.current_chunk().write_constant(value, line) > u8::MAX as usize {
+        let index = self.make_constant(value);
+        self.emit_bytes(OpCode::OpConstant, index as u8)
+    }
+
+    fn make_constant(&mut self, value: Value) -> usize {
+        let index = self.current_chunk().add_constant(value);
+
+        if index > u8::MAX as usize {
             self.error("Too many constants in one chunk");
         }
+
+        index
     }
 
     fn end_compiler(&mut self) {
@@ -105,22 +129,87 @@ impl<'a> Parser<'a> {
         self.parse_precedence(Precedence::Assignment);
     }
 
-    fn grouping(&mut self) {
+    fn expression_statement(&mut self) {
+        self.expression();
+        self.consume(TokenType::Semicolon, "Expect ';' after expression.");
+        self.emit_byte(OpCode::OpPop);
+    }
+
+    fn statement(&mut self) {
+        if self.check_advance(TokenType::Print) {
+            self.print_statement();
+        } else {
+            self.expression_statement();
+        }
+    }
+
+    fn print_statement(&mut self) {
+        self.expression();
+        self.consume(TokenType::Semicolon, "Expect ';' after value.");
+        self.emit_byte(OpCode::OpPrint);
+    }
+
+    fn declaration(&mut self) {
+        if self.check_advance(TokenType::Var) {
+            self.var_declaration();
+        } else {
+            self.statement();
+        }
+
+        if self.panic_mode {
+            self.synchronize();
+        }
+    }
+
+    fn var_declaration(&mut self) {
+        let global = self.parse_variable("Expect a variable name.");
+
+        if self.check_advance(TokenType::Equal) {
+            self.expression();
+        } else {
+            self.emit_byte(OpCode::OpNil);
+        }
+
+        self.consume(
+            TokenType::Semicolon,
+            "Expect ';' after variable declaration.",
+        );
+
+        self.define_variable(global);
+    }
+
+    fn grouping(&mut self, _can_assign: bool) {
         self.expression();
         self.consume(TokenType::RightParen, "Expect ')' after expression.");
     }
 
-    fn number(&mut self) {
+    fn number(&mut self, _can_assign: bool) {
         let value: f64 = self.previous.value.parse().unwrap();
         self.emit_constant(value.into());
     }
 
-    fn string(&mut self) {
-        self.emit_constant(self.previous.value.into())
+    fn string(&mut self, _can_assign: bool) {
+        self.emit_constant(self.previous.value.into());
     }
 
-    fn unary(&mut self) {
-        let op = self.previous.ttype;
+    fn named_variable(&mut self, name: Value, can_assign: bool) {
+        let arg = self.identifier_constant(name);
+
+        if can_assign && self.check_advance(TokenType::Equal) {
+            self.expression();
+            self.emit_bytes(OpCode::OpSetGlobal, arg);
+        } else {
+            self.emit_bytes(OpCode::OpGetGlobal, arg);
+        }
+    }
+
+    fn variable(&mut self, can_assign: bool) {
+        let previous = self.previous.value.into();
+        self.named_variable(previous, can_assign)
+    }
+
+    fn unary(&mut self, _can_assign: bool) {
+        let op = self.previous.kind;
 
         self.parse_precedence(Precedence::Unary);
 
@@ -131,11 +220,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn binary(&mut self) {
+    fn binary(&mut self, _can_assign: bool) {
         use OpCode::*;
         use TokenType::*;
 
-        let op = self.previous.ttype;
+        let op = self.previous.kind;
 
         let rule = ParseRule::get_rule(op);
         self.parse_precedence(rule.precedence + 1);
@@ -155,8 +244,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn literal(&mut self) {
-        match self.previous.ttype {
+    fn literal(&mut self, _can_assign: bool) {
+        match self.previous.kind {
             TokenType::False => self.emit_byte(OpCode::OpFalse),
             TokenType::Nil => self.emit_byte(OpCode::OpNil),
             TokenType::True => self.emit_byte(OpCode::OpTrue),
@@ -167,15 +256,55 @@ impl<'a> Parser<'a> {
     fn parse_precedence(&mut self, precedence: Precedence) {
         self.advance();
 
-        match ParseRule::get_rule(self.previous.ttype).prefix {
+        let prefix_rule = match ParseRule::get_rule(self.previous.kind).prefix {
             None => return self.error("Expect expression."),
-            Some(rule) => rule(self),
+            Some(rule) => rule,
+        };
+
+        let can_assign = precedence <= Precedence::Assignment;
+        prefix_rule(self, can_assign);
+
+        while precedence <= ParseRule::get_rule(self.current.kind).precedence {
+            self.advance();
+            let infix_rule = ParseRule::get_rule(self.previous.kind).infix.unwrap();
+            infix_rule(self, can_assign);
         }
 
-        while precedence <= ParseRule::get_rule(self.current.ttype).precedence {
+        if can_assign && self.check_advance(TokenType::Equal) {
+            self.error("Invalid assignment target.");
+        }
+    }
+
+    fn define_variable(&mut self, global: u8) {
+        self.emit_bytes(OpCode::OpDefineGlobal, global);
+    }
+
+    fn parse_variable(&mut self, message: &str) -> u8 {
+        self.consume(TokenType::Identifier, message);
+        let name = self.previous.value.into();
+        self.identifier_constant(name)
+    }
+
+    fn identifier_constant(&mut self, name: Value) -> u8 {
+        self.make_constant(name) as u8
+    }
+
+    fn synchronize(&mut self) {
+        use TokenType::*;
+
+        self.panic_mode = false;
+
+        while self.current.kind != Eof {
+            if self.previous.kind == Semicolon {
+                return;
+            }
+
+            match self.current.kind {
+                Class | Fun | Var | For | If | While | Print | Return => return,
+                _ => (),
+            }
+
             self.advance();
-            let rule = ParseRule::get_rule(self.previous.ttype).infix.unwrap();
-            rule(self);
         }
     }
 
@@ -196,7 +325,7 @@ impl<'a> Parser<'a> {
 
         eprint!("[line {}] Error", token.line);
 
-        match token.ttype {
+        match token.kind {
             TokenType::Eof => eprint!(" at end"),
             TokenType::Error => (),
             _ => eprint!(" at {}", token.value),
@@ -231,7 +360,7 @@ impl std::ops::Add<u8> for Precedence {
     }
 }
 
-type ParseFn<'a> = fn(&mut Parser<'a>);
+type ParseFn<'a> = fn(&mut Parser<'a>, bool);
 
 struct ParseRule<'a> {
     prefix: Option<ParseFn<'a>>,
@@ -252,8 +381,8 @@ impl<'a> ParseRule<'a> {
         }
     }
 
-    fn get_rule(ttype: TokenType) -> Self {
-        match ttype {
+    fn get_rule(kind: TokenType) -> Self {
+        match kind {
             TokenType::LeftParen => Self::new(Some(Parser::grouping), None, Precedence::None),
             TokenType::RightParen => Self::new(None, None, Precedence::None),
             TokenType::LeftBrace => Self::new(None, None, Precedence::None),
@@ -277,7 +406,7 @@ impl<'a> ParseRule<'a> {
             }
             TokenType::Less => Self::new(None, Some(Parser::binary), Precedence::Comparison),
             TokenType::LessEqual => Self::new(None, Some(Parser::binary), Precedence::Comparison),
-            TokenType::Identifier => Self::new(None, None, Precedence::None),
+            TokenType::Identifier => Self::new(Some(Parser::variable), None, Precedence::None),
             TokenType::String => Self::new(Some(Parser::string), None, Precedence::None),
             TokenType::Number => Self::new(Some(Parser::number), None, Precedence::None),
             TokenType::And => Self::new(None, None, Precedence::And),

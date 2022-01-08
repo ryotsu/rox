@@ -57,3 +57,12 @@ impl From<&str> for Value {
         Self::String(Rc::new(String::from(s)))
     }
 }
+
+impl From<Value> for String {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::String(s) => s.to_string(),
+            _ => unimplemented!(),
+        }
+    }
+}

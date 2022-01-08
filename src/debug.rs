@@ -26,6 +26,10 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         OpNil => simple_instruction("OP_NIL", offset),
         OpTrue => simple_instruction("OP_TRUE", offset),
         OpFalse => simple_instruction("OP_FALSE", offset),
+        OpPop => simple_instruction("OP_POP", offset),
+        OpGetGlobal => constant_instruction("OP_GET_GLOBAL", chunk, offset),
+        OpDefineGlobal => constant_instruction("OP_DEFINE_GLOBAL", chunk, offset),
+        OpSetGlobal => constant_instruction("OP_SET_GLOBAL", chunk, offset),
         OpEqual => simple_instruction("OP_EQUAL", offset),
         OpGreater => simple_instruction("OP_GREATER", offset),
         OpLess => simple_instruction("OP_LESS", offset),
@@ -35,6 +39,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         OpDivide => simple_instruction("OP_DIVIDE", offset),
         OpNot => simple_instruction("OP_NOT", offset),
         OpNegate => simple_instruction("OP_NEGATE", offset),
+        OpPrint => simple_instruction("OP_PRINT", offset),
         OpReturn => simple_instruction("OP_RETURN", offset),
     }
 }
