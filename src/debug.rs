@@ -45,6 +45,7 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         OpJump => jump_instruction("OP_JUMP", 1, chunk, offset),
         OpJumpIfFalse => jump_instruction("OP_JUMP_IF_FALSE", 1, chunk, offset),
         OpLoop => jump_instruction("OP_LOOP", -1, chunk, offset),
+        OpCall => byte_instruction("OP_CALL", chunk, offset),
         OpReturn => simple_instruction("OP_RETURN", offset),
     }
 }

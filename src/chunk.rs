@@ -29,6 +29,7 @@ pub enum OpCode {
     OpJump,
     OpJumpIfFalse,
     OpLoop,
+    OpCall,
     OpReturn,
 }
 
@@ -38,6 +39,7 @@ impl From<u8> for OpCode {
     }
 }
 
+#[derive(Clone)]
 pub struct Chunk {
     pub code: Vec<OpCode>,
     pub constants: Vec<Value>,

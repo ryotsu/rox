@@ -1,22 +1,36 @@
 use super::chunk::{Chunk, OpCode};
 use super::compiler::Parser;
+use super::native::*;
 use super::table::Table;
-use super::value::Value;
+use super::value::{Function, Native, NativeFn, Value};
 
 use std::collections::hash_map::Entry;
 use std::mem;
+use std::rc::Rc;
 
 #[cfg(feature = "debug_trace_execution")]
 use super::debug;
 
-const STACK_MAX: usize = 256;
+const FRAME_MAX: usize = 64;
+const STACK_MAX: usize = FRAME_MAX * 256;
 
 pub struct VM {
-    pub chunk: Chunk,
-    ip: usize,
+    frames: Vec<CallFrame>,
     stack: [Value; STACK_MAX],
     stack_top: usize,
     globals: Table,
+}
+
+struct CallFrame {
+    function: Rc<Function>,
+    ip: usize,
+    slot: usize,
+}
+
+impl CallFrame {
+    fn from(function: Rc<Function>, ip: usize, slot: usize) -> Self {
+        Self { function, ip, slot }
+    }
 }
 
 pub enum InterpretResult {
@@ -36,7 +50,7 @@ macro_rules! binary_op {
                 (String::with_capacity(a.len() + b.len()) + &a + &b).into()
             }
             _ => {
-                $self.runtime_error("Addition not supported on non number/string operands.");
+                $self.runtime_error("Both operands must be numbers/strings.");
                 return InterpretResult::RuntimeError;
             }
         };
@@ -50,7 +64,7 @@ macro_rules! binary_op {
         let value = match (a, b) {
             (Value::Number(a), Value::Number(b)) => (a $op b).into(),
             _ => {
-                $self.runtime_error("Operation not supported on non number operands.");
+                $self.runtime_error("Operands must be numbers.");
                 return InterpretResult::RuntimeError;
             }
         };
@@ -59,40 +73,33 @@ macro_rules! binary_op {
     }};
 }
 
-macro_rules! binary_cmp {
-    ($self:ident, $op:tt) => {
-        {
-            let b = $self.pop();
-            let a = $self.pop();
-            $self.push((a $op b).into());
-        }
-    };
-}
-
 impl VM {
     pub fn new() -> Self {
-        Self {
-            chunk: Chunk::new(),
-            ip: 0,
+        let mut vm = Self {
+            frames: Vec::with_capacity(FRAME_MAX),
             stack: unsafe { mem::zeroed() },
             stack_top: 0,
             globals: Table::new(),
-        }
+        };
+
+        vm.define_native("clock", 0, clock_native);
+        vm
     }
 
     fn read_byte(&mut self) -> OpCode {
-        self.ip += 1;
-        self.chunk.code[self.ip - 1]
+        self.frame_mut().ip += 1;
+        self.chunk().code[self.frame().ip - 1]
     }
 
     fn read_short(&mut self) -> usize {
-        self.ip += 2;
-        (self.chunk.code[self.ip - 2] as usize) << 8 | self.chunk.code[self.ip - 1] as usize
+        self.frame_mut().ip += 2;
+        (self.chunk().code[self.frame().ip - 2] as usize) << 8
+            | self.chunk().code[self.frame().ip - 1] as usize
     }
 
     fn read_constant(&mut self) -> Value {
         let index = self.read_byte() as usize;
-        self.chunk.constants[index].clone()
+        self.chunk().constants[index].clone()
     }
 
     fn push(&mut self, value: Value) {
@@ -105,28 +112,111 @@ impl VM {
         mem::take(&mut self.stack[self.stack_top])
     }
 
-    fn peek(&mut self, distance: usize) -> &Value {
+    fn peek(&self, distance: usize) -> &Value {
         &self.stack[self.stack_top - 1 - distance]
+    }
+
+    fn call(&mut self, function: Rc<Function>, arg_count: u8) -> bool {
+        if arg_count != function.arity {
+            self.runtime_error(&format!(
+                "Expected {} arguments but got {}.",
+                function.arity, arg_count
+            ));
+            return false;
+        }
+
+        if self.frames.len() == FRAME_MAX {
+            self.runtime_error("Stack overflow.");
+            return false;
+        }
+
+        let frame = CallFrame::from(function, 0, self.stack_top - arg_count as usize - 1);
+        self.frames.push(frame);
+
+        true
+    }
+
+    fn call_value(&mut self, callee: Value, arg_count: u8) -> bool {
+        match callee {
+            Value::Function(function) => self.call(function, arg_count),
+            Value::Native(function) => {
+                let value = (function.function)(
+                    arg_count,
+                    &self.stack[(self.stack_top - arg_count as usize)..],
+                );
+                self.stack_top -= arg_count as usize + 1;
+                self.push(value);
+                true
+            }
+            _ => {
+                self.runtime_error("Can only call functions and classes.");
+                false
+            }
+        }
     }
 
     fn reset_stack(&mut self) {
         self.stack_top = 0;
+        self.frames.clear();
     }
 
     fn runtime_error(&mut self, message: &str) {
         eprintln!("{}", message);
 
-        eprintln!("[line {}] in script", self.chunk.lines[self.ip - 1]);
+        for frame in self.frames.iter().rev() {
+            let function = &frame.function;
+            let index = frame.ip - 1;
+            eprint!("[line {}] in ", function.chunk.lines[index]);
+            if function.name.as_str() == "" {
+                eprintln!("script");
+            } else {
+                eprintln!("{}", function.name);
+            }
+        }
+
         self.reset_stack();
     }
 
-    pub fn interpret(&mut self, source: &str) {
-        let mut chunk = Chunk::new();
-        Parser::compile(source, &mut chunk);
-        self.chunk = chunk;
+    fn define_native(&mut self, name: &str, arity: u8, native: NativeFn) {
+        let function = Native {
+            name: Rc::new(name.to_string()),
+            arity,
+            function: native,
+        };
 
-        self.ip = 0;
-        self.run();
+        self.globals.insert(name.into(), function.into());
+    }
+
+    fn frame(&self) -> &CallFrame {
+        self.frames.last().unwrap()
+    }
+
+    fn frame_mut(&mut self) -> &mut CallFrame {
+        self.frames.last_mut().unwrap()
+    }
+
+    fn chunk(&self) -> &Chunk {
+        &self.frame().function.chunk
+    }
+
+    pub fn interpret(&mut self, source: &str) -> InterpretResult {
+        let function = Parser::compile(source);
+        if function.is_none() {
+            return InterpretResult::CompileError;
+        }
+
+        let function = function.unwrap();
+        self.push(function.clone().into());
+
+        let frame = CallFrame {
+            function: Rc::new(function),
+            ip: 0,
+            slot: 0,
+        };
+
+        self.frames.push(frame);
+
+        self.run()
     }
 
     fn run(&mut self) -> InterpretResult {
@@ -141,7 +231,8 @@ impl VM {
                 }
                 println!();
 
-                debug::disassemble_instruction(&self.chunk, self.ip);
+                let ip = self.frame().ip;
+                debug::disassemble_instruction(self.chunk(), ip);
             }
 
             let instruction = self.read_byte();
@@ -158,11 +249,12 @@ impl VM {
                 }
                 OpGetLocal => {
                     let slot = self.read_byte();
-                    self.push(self.stack[slot as usize].clone());
+                    let value = self.stack[self.frame().slot + slot as usize].clone();
+                    self.push(value);
                 }
                 OpSetLocal => {
                     let slot = self.read_byte();
-                    self.stack[slot as usize] = self.peek(0).clone();
+                    self.stack[self.frame().slot + slot as usize] = self.peek(0).clone();
                 }
                 OpGetGlobal => {
                     let name: String = self.read_constant().into();
@@ -196,8 +288,8 @@ impl VM {
                     let a = self.pop();
                     self.push((a == b).into());
                 }
-                OpGreater => binary_cmp!(self, >),
-                OpLess => binary_cmp!(self, <),
+                OpGreater => binary_op!(self, >),
+                OpLess => binary_op!(self, <),
                 OpAdd => binary_op!(self, +),
                 OpSubtract => binary_op!(self, -),
                 OpMultiply => binary_op!(self, *),
@@ -217,21 +309,37 @@ impl VM {
                 OpPrint => println!("{}", self.pop()),
                 OpJump => {
                     let offset = self.read_short();
-                    self.ip += offset;
+                    self.frame_mut().ip += offset;
                 }
                 OpJumpIfFalse => {
                     let offset = self.read_short();
                     if self.peek(0).is_falsey() {
-                        self.ip += offset;
+                        self.frame_mut().ip += offset;
                     }
                 }
                 OpLoop => {
                     let offset = self.read_short();
-                    self.ip -= offset;
+                    self.frame_mut().ip -= offset;
+                }
+                OpCall => {
+                    let arg_count = self.read_byte() as u8;
+                    let value = self.peek(arg_count as usize).clone();
+                    if !self.call_value(value, arg_count) {
+                        return InterpretResult::RuntimeError;
+                    }
                 }
                 OpReturn => {
-                    //println!("{}", self.pop());
-                    return InterpretResult::Ok;
+                    let value = self.pop();
+                    let slot = self.frame().slot;
+
+                    self.frames.pop();
+                    if self.frames.is_empty() {
+                        self.pop();
+                        return InterpretResult::Ok;
+                    }
+
+                    self.stack_top = slot;
+                    self.push(value);
                 }
             }
         }
