@@ -85,9 +85,14 @@ impl VM {
         self.chunk.code[self.ip - 1]
     }
 
+    fn read_short(&mut self) -> usize {
+        self.ip += 2;
+        (self.chunk.code[self.ip - 2] as usize) << 8 | self.chunk.code[self.ip - 1] as usize
+    }
+
     fn read_constant(&mut self) -> Value {
         let index = self.read_byte() as usize;
-        mem::take(&mut self.chunk.constants[index])
+        self.chunk.constants[index].clone()
     }
 
     fn push(&mut self, value: Value) {
@@ -210,6 +215,20 @@ impl VM {
                     }
                 }
                 OpPrint => println!("{}", self.pop()),
+                OpJump => {
+                    let offset = self.read_short();
+                    self.ip += offset;
+                }
+                OpJumpIfFalse => {
+                    let offset = self.read_short();
+                    if self.peek(0).is_falsey() {
+                        self.ip += offset;
+                    }
+                }
+                OpLoop => {
+                    let offset = self.read_short();
+                    self.ip -= offset;
+                }
                 OpReturn => {
                     //println!("{}", self.pop());
                     return InterpretResult::Ok;

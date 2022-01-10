@@ -1,13 +1,11 @@
-use crate::chunk::OpCode;
+use super::chunk::{Chunk, OpCode};
+use super::scanner::{Scanner, Token, TokenType};
 use crate::value::Value;
 
-use super::chunk::Chunk;
-use super::scanner::{Scanner, Token, TokenType};
-
-#[cfg(debug_print_code)]
-use super::debug;
-
 use std::mem;
+
+#[cfg(feature = "debug_print_code")]
+use super::debug;
 
 pub struct Parser<'a> {
     scanner: Scanner<'a>,
@@ -110,6 +108,26 @@ impl<'a> Parser<'a> {
         self.emit_byte(op_code2);
     }
 
+    fn emit_jump<T: Into<OpCode>>(&mut self, op_code: T) -> usize {
+        self.emit_byte(op_code);
+        self.emit_byte(0xff);
+        self.emit_byte(0xff);
+
+        self.current_chunk().code.len() - 2
+    }
+
+    fn emit_loop(&mut self, loop_start: usize) {
+        self.emit_byte(OpCode::OpLoop);
+
+        let offset = self.current_chunk().code.len() - loop_start + 2;
+        if offset > u16::MAX as usize {
+            self.error("Loop body is too larger");
+        }
+
+        self.emit_byte(((offset >> 8) & 0xff) as u8);
+        self.emit_byte((offset & 0xff) as u8);
+    }
+
     fn emit_return(&mut self) {
         self.emit_byte(OpCode::OpReturn);
     }
@@ -129,12 +147,23 @@ impl<'a> Parser<'a> {
         index
     }
 
+    fn patch_jump(&mut self, offset: usize) {
+        let jump = self.current_chunk().code.len() - offset - 2;
+
+        if jump > u16::MAX as usize {
+            self.error("Too much code to jump over.");
+        }
+
+        self.current_chunk().code[offset] = (((jump >> 8) & 0xff) as u8).into();
+        self.current_chunk().code[offset + 1] = ((jump & 0xff) as u8).into();
+    }
+
     fn end_compiler(&mut self) {
         self.emit_return();
 
-        #[cfg(debug_print_code)]
+        #[cfg(feature = "debug_print_code")]
         if !self.had_error {
-            debug::disassemble_chunk(&self.current_chunk(), "code");
+            debug::disassemble_chunk(self.current_chunk(), "code");
         }
     }
 
@@ -151,6 +180,12 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) {
         if self.check_advance(TokenType::Print) {
             self.print_statement();
+        } else if self.check_advance(TokenType::For) {
+            self.for_statement();
+        } else if self.check_advance(TokenType::If) {
+            self.if_statement();
+        } else if self.check_advance(TokenType::While) {
+            self.while_statement();
         } else if self.check_advance(TokenType::LeftBrace) {
             self.begin_scope();
             self.block();
@@ -164,6 +199,91 @@ impl<'a> Parser<'a> {
         self.expression();
         self.consume(TokenType::Semicolon, "Expect ';' after value.");
         self.emit_byte(OpCode::OpPrint);
+    }
+
+    fn for_statement(&mut self) {
+        self.begin_scope();
+
+        self.consume(TokenType::LeftParen, "Expect '(' after 'for'.");
+
+        if self.check_advance(TokenType::Semicolon) {
+        } else if self.check_advance(TokenType::Var) {
+            self.var_declaration();
+        } else {
+            self.expression_statement();
+        }
+
+        let mut loop_start = self.current_chunk().code.len();
+        let mut exit_jump = usize::MAX;
+        if !self.check_advance(TokenType::Semicolon) {
+            self.expression();
+            self.consume(TokenType::Semicolon, "Expect ';' after loop condition.");
+
+            exit_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+            self.emit_byte(OpCode::OpPop);
+        }
+
+        if !self.check_advance(TokenType::RightParen) {
+            let body_jump = self.emit_jump(OpCode::OpJump);
+            let increment_start = self.current_chunk().code.len();
+
+            self.expression();
+            self.emit_byte(OpCode::OpPop);
+            self.consume(TokenType::RightParen, "Expect ')' after for clauses.");
+
+            self.emit_loop(loop_start);
+            loop_start = increment_start;
+            self.patch_jump(body_jump);
+        }
+
+        self.statement();
+        self.emit_loop(loop_start);
+
+        if exit_jump != usize::MAX {
+            self.patch_jump(exit_jump);
+            self.emit_byte(OpCode::OpPop);
+        }
+
+        self.end_scope();
+    }
+
+    fn if_statement(&mut self) {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'if'.");
+        self.expression();
+        self.consume(TokenType::RightParen, "Expect ')' after condition.");
+
+        let then_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+        self.emit_byte(OpCode::OpPop);
+
+        self.statement();
+
+        let else_jump = self.emit_jump(OpCode::OpJump);
+
+        self.patch_jump(then_jump);
+        self.emit_byte(OpCode::OpPop);
+
+        if self.check_advance(TokenType::Else) {
+            self.statement();
+        }
+
+        self.patch_jump(else_jump);
+    }
+
+    fn while_statement(&mut self) {
+        let loop_start = self.current_chunk().code.len();
+
+        self.consume(TokenType::LeftParen, "Expect '(' after 'while'.");
+        self.expression();
+        self.consume(TokenType::RightParen, "Expect ')' after condition.");
+
+        let exit_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+        self.emit_byte(OpCode::OpPop);
+
+        self.statement();
+        self.emit_loop(loop_start);
+
+        self.patch_jump(exit_jump);
+        self.emit_byte(OpCode::OpPop);
     }
 
     fn declaration(&mut self) {
@@ -329,6 +449,26 @@ impl<'a> Parser<'a> {
         }
 
         self.emit_bytes(OpCode::OpDefineGlobal, global);
+    }
+
+    fn and(&mut self, _can_assign: bool) {
+        let end_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+
+        self.emit_byte(OpCode::OpPop);
+        self.parse_precedence(Precedence::And);
+
+        self.patch_jump(end_jump);
+    }
+
+    fn or(&mut self, _can_assign: bool) {
+        let else_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+        let end_jump = self.emit_jump(OpCode::OpJump);
+
+        self.patch_jump(else_jump);
+        self.emit_byte(OpCode::OpPop);
+
+        self.parse_precedence(Precedence::Or);
+        self.patch_jump(end_jump);
     }
 
     fn parse_variable(&mut self, message: &str) -> u8 {
@@ -520,7 +660,7 @@ impl<'a> ParseRule<'a> {
             TokenType::Identifier => Self::new(Some(Parser::variable), None, Precedence::None),
             TokenType::String => Self::new(Some(Parser::string), None, Precedence::None),
             TokenType::Number => Self::new(Some(Parser::number), None, Precedence::None),
-            TokenType::And => Self::new(None, None, Precedence::And),
+            TokenType::And => Self::new(None, Some(Parser::and), Precedence::And),
             TokenType::Class => Self::new(None, None, Precedence::None),
             TokenType::Else => Self::new(None, None, Precedence::None),
             TokenType::False => Self::new(Some(Parser::literal), None, Precedence::None),
@@ -528,7 +668,7 @@ impl<'a> ParseRule<'a> {
             TokenType::Fun => Self::new(None, None, Precedence::None),
             TokenType::If => Self::new(None, None, Precedence::None),
             TokenType::Nil => Self::new(Some(Parser::literal), None, Precedence::None),
-            TokenType::Or => Self::new(None, None, Precedence::Or),
+            TokenType::Or => Self::new(None, Some(Parser::or), Precedence::Or),
             TokenType::Print => Self::new(None, None, Precedence::None),
             TokenType::Return => Self::new(None, None, Precedence::None),
             TokenType::Super => Self::new(None, None, Precedence::None),

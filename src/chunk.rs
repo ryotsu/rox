@@ -26,6 +26,9 @@ pub enum OpCode {
     OpNot,
     OpNegate,
     OpPrint,
+    OpJump,
+    OpJumpIfFalse,
+    OpLoop,
     OpReturn,
 }
 
