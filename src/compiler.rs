@@ -20,11 +20,24 @@ pub struct Parser<'a> {
 
 struct Compiler<'a> {
     chunk: &'a mut Chunk,
+    locals: [Local<'a>; u8::MAX as usize],
+    count: usize,
+    scope: usize,
+}
+
+struct Local<'a> {
+    name: Token<'a>,
+    depth: usize,
 }
 
 impl<'a> Compiler<'a> {
     fn from(chunk: &'a mut Chunk) -> Self {
-        Self { chunk }
+        Self {
+            chunk,
+            locals: unsafe { mem::zeroed() },
+            count: 0,
+            scope: 0,
+        }
     }
 }
 
@@ -138,6 +151,10 @@ impl<'a> Parser<'a> {
     fn statement(&mut self) {
         if self.check_advance(TokenType::Print) {
             self.print_statement();
+        } else if self.check_advance(TokenType::LeftBrace) {
+            self.begin_scope();
+            self.block();
+            self.end_scope();
         } else {
             self.expression_statement();
         }
@@ -178,6 +195,29 @@ impl<'a> Parser<'a> {
         self.define_variable(global);
     }
 
+    fn block(&mut self) {
+        while !self.check(TokenType::RightBrace) && !self.check(TokenType::Eof) {
+            self.declaration();
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after block.");
+    }
+
+    fn begin_scope(&mut self) {
+        self.compiler.scope += 1;
+    }
+
+    fn end_scope(&mut self) {
+        self.compiler.scope -= 1;
+
+        while self.compiler.count > 0
+            && self.compiler.locals[self.compiler.count - 1].depth > self.compiler.scope
+        {
+            self.emit_byte(OpCode::OpPop);
+            self.compiler.count -= 1;
+        }
+    }
+
     fn grouping(&mut self, _can_assign: bool) {
         self.expression();
         self.consume(TokenType::RightParen, "Expect ')' after expression.");
@@ -193,13 +233,20 @@ impl<'a> Parser<'a> {
     }
 
     fn named_variable(&mut self, name: Value, can_assign: bool) {
-        let arg = self.identifier_constant(name);
+        let str_name: String = name.clone().into();
+        let mut arg = self.resolve_local(&str_name);
+        let (get_op, set_op) = if arg != usize::MAX {
+            (OpCode::OpGetLocal, OpCode::OpSetLocal)
+        } else {
+            arg = self.identifier_constant(name);
+            (OpCode::OpGetGlobal, OpCode::OpSetGlobal)
+        };
 
         if can_assign && self.check_advance(TokenType::Equal) {
             self.expression();
-            self.emit_bytes(OpCode::OpSetGlobal, arg);
+            self.emit_bytes(set_op, arg as u8);
         } else {
-            self.emit_bytes(OpCode::OpGetGlobal, arg);
+            self.emit_bytes(get_op, arg as u8);
         }
     }
 
@@ -276,17 +323,81 @@ impl<'a> Parser<'a> {
     }
 
     fn define_variable(&mut self, global: u8) {
+        if self.compiler.scope > 0 {
+            self.mark_initialized();
+            return;
+        }
+
         self.emit_bytes(OpCode::OpDefineGlobal, global);
     }
 
     fn parse_variable(&mut self, message: &str) -> u8 {
         self.consume(TokenType::Identifier, message);
+
+        self.declare_variable();
+        if self.compiler.scope > 0 {
+            return 0;
+        }
+
         let name = self.previous.value.into();
-        self.identifier_constant(name)
+        self.identifier_constant(name) as u8
     }
 
-    fn identifier_constant(&mut self, name: Value) -> u8 {
-        self.make_constant(name) as u8
+    fn mark_initialized(&mut self) {
+        self.compiler.locals[self.compiler.count - 1].depth = self.compiler.scope;
+    }
+
+    fn identifier_constant(&mut self, name: Value) -> usize {
+        self.make_constant(name)
+    }
+
+    fn resolve_local(&mut self, name: &str) -> usize {
+        for i in (0..self.compiler.count).rev() {
+            let local = &self.compiler.locals[i];
+            if name == local.name.value {
+                if local.depth == usize::MAX {
+                    self.error("Can't read local variable in its own own initializer.");
+                }
+                return i;
+            }
+        }
+
+        usize::MAX
+    }
+
+    fn add_local(&mut self, name: Token<'a>) {
+        if self.compiler.count == u8::MAX as usize {
+            self.error("Too many local variables in function.");
+            return;
+        }
+
+        let local = Local {
+            name,
+            depth: usize::MAX,
+        };
+
+        self.compiler.locals[self.compiler.count] = local;
+        self.compiler.count += 1;
+    }
+
+    fn declare_variable(&mut self) {
+        if self.compiler.scope == 0 {
+            return;
+        }
+
+        let name = self.previous.clone();
+        for i in (0..self.compiler.count).rev() {
+            let local = &self.compiler.locals[i];
+            if local.depth != usize::MAX && local.depth < self.compiler.scope {
+                break;
+            }
+
+            if name.value == local.name.value {
+                self.error("Already a variable with this name in this scope.");
+            }
+        }
+
+        self.add_local(name);
     }
 
     fn synchronize(&mut self) {

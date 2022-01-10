@@ -26,25 +26,37 @@ pub enum InterpretResult {
 }
 
 macro_rules! binary_op {
-    ($self:ident, $op:tt) => {
-        {
-            let b = $self.pop();
-            let a = $self.pop();
+    ($self:ident, +) => {{
+        let b = $self.pop();
+        let a = $self.pop();
 
-            let value = match (a, b) {
-                (Value::Number(a), Value::Number(b)) => (a $op b).into(),
-                (Value::String(a), Value::String(b)) => {
-                    (String::with_capacity(a.len() + b.len()) + &a + &b).into()
-                }
-                _ => {
-                    $self.runtime_error("Operation not supported on the given operands.");
-                    return InterpretResult::RuntimeError;
-                }
-            };
+        let value = match (a, b) {
+            (Value::Number(a), Value::Number(b)) => (a + b).into(),
+            (Value::String(a), Value::String(b)) => {
+                (String::with_capacity(a.len() + b.len()) + &a + &b).into()
+            }
+            _ => {
+                $self.runtime_error("Addition not supported on non number/string operands.");
+                return InterpretResult::RuntimeError;
+            }
+        };
 
-            $self.push(value);
-        }
-    };
+        $self.push(value);
+    }};
+    ($self:ident, $op:tt) => {{
+        let b = $self.pop();
+        let a = $self.pop();
+
+        let value = match (a, b) {
+            (Value::Number(a), Value::Number(b)) => (a $op b).into(),
+            _ => {
+                $self.runtime_error("Operation not supported on non number operands.");
+                return InterpretResult::RuntimeError;
+            }
+        };
+
+        $self.push(value);
+    }};
 }
 
 macro_rules! binary_cmp {
@@ -138,6 +150,14 @@ impl VM {
                 OpFalse => self.push(false.into()),
                 OpPop => {
                     self.pop();
+                }
+                OpGetLocal => {
+                    let slot = self.read_byte();
+                    self.push(self.stack[slot as usize].clone());
+                }
+                OpSetLocal => {
+                    let slot = self.read_byte();
+                    self.stack[slot as usize] = self.peek(0).clone();
                 }
                 OpGetGlobal => {
                     let name: String = self.read_constant().into();
