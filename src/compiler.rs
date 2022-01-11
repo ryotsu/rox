@@ -1,12 +1,9 @@
-use super::chunk::{Chunk, OpCode};
-use super::scanner::{Scanner, Token, TokenType};
-use crate::value::{Function, Value};
+use crate::chunk::{Chunk, OpCode};
+use crate::scanner::{Scanner, Token, TokenType};
+use crate::value::{FnUpvalue, Function, Value};
 
 use std::mem;
 use std::rc::Rc;
-
-#[cfg(feature = "debug_print_code")]
-use super::debug;
 
 pub struct Parser<'a> {
     scanner: Scanner<'a>,
@@ -15,20 +12,31 @@ pub struct Parser<'a> {
     compiler: Box<Compiler<'a>>,
     had_error: bool,
     panic_mode: bool,
+    errors: Vec<&'static str>,
 }
 
 struct Compiler<'a> {
     enclosing: Option<Box<Compiler<'a>>>,
-    locals: [Local<'a>; u8::MAX as usize],
-    count: usize,
-    scope: usize,
+    locals: Vec<Local<'a>>,
+    scope_depth: i32,
     function: Function,
     function_type: FunctionType,
 }
 
 struct Local<'a> {
-    name: Token<'a>,
-    depth: usize,
+    name: &'a str,
+    depth: i32,
+    is_captured: bool,
+}
+
+impl<'a> Local<'a> {
+    fn new(name: &'a str, depth: i32) -> Self {
+        Self {
+            name,
+            depth,
+            is_captured: false,
+        }
+    }
 }
 
 enum FunctionType {
@@ -37,69 +45,138 @@ enum FunctionType {
 }
 
 impl<'a> Compiler<'a> {
-    fn from(ftype: FunctionType) -> Self {
+    fn new(ftype: FunctionType, name: Rc<String>) -> Box<Self> {
         let mut compiler = Self {
             enclosing: None,
-            locals: unsafe { mem::zeroed() },
-            count: 1,
-            scope: 0,
-            function: Function::new(),
+            locals: Vec::new(),
+            scope_depth: 0,
+            function: Function::new(name),
             function_type: ftype,
         };
 
-        compiler.locals[0] = Local {
-            name: Token::default(),
-            depth: 0,
-        };
+        compiler.locals.push(Local::new("", 0));
 
-        compiler
+        Box::new(compiler)
     }
-}
 
-impl<'a> Default for Compiler<'a> {
-    fn default() -> Self {
-        Self::from(FunctionType::Script)
+    fn resolve_local(&mut self, name: &str, errors: &mut Vec<&'static str>) -> Option<u8> {
+        for (i, local) in self.locals.iter().enumerate().rev() {
+            if name == local.name {
+                if local.depth == -1 {
+                    errors.push("Can't read local variable in its own own initializer.");
+                }
+
+                return Some(i as u8);
+            }
+        }
+
+        None
+    }
+
+    fn resolve_upvalue(&mut self, name: &str, errors: &mut Vec<&'static str>) -> Option<u8> {
+        if let Some(enclosing) = self.enclosing.as_mut() {
+            if let Some(local) = enclosing.resolve_local(name, errors) {
+                enclosing.locals[local as usize].is_captured = true;
+                return Some(self.add_upvalue(local, true, errors));
+            }
+
+            if let Some(upvalue) = enclosing.resolve_upvalue(name, errors) {
+                return Some(self.add_upvalue(upvalue, false, errors));
+            }
+        }
+
+        None
+    }
+
+    fn add_upvalue(&mut self, index: u8, is_local: bool, errors: &mut Vec<&'static str>) -> u8 {
+        for (i, upvalue) in self.function.upvalues.iter().enumerate() {
+            if upvalue.index == index && upvalue.is_local == is_local {
+                return i as u8;
+            }
+        }
+
+        if self.function.upvalues.len() == 255 {
+            errors.push("Too many closure variables in function.");
+        }
+
+        self.function.upvalues.push(FnUpvalue { index, is_local });
+        self.function.upvalues.len() as u8 - 1
+    }
+
+    fn is_local_declared(&self, name: &str) -> bool {
+        for local in self.locals.iter().rev() {
+            if local.depth != -1 && local.depth < self.scope_depth {
+                return false;
+            }
+
+            if name == local.name {
+                return true;
+            }
+        }
+
+        false
     }
 }
 
 impl<'a> Parser<'a> {
-    pub fn compile(source: &'a str) -> Option<Function> {
-        let mut parser = Self {
+    fn new(source: &'a str) -> Self {
+        Self {
             scanner: Scanner::from(source),
             previous: Token::default(),
             current: Token::default(),
-            compiler: Box::new(Compiler::default()),
+            compiler: Compiler::new(FunctionType::Script, Rc::new(String::from("script"))),
             had_error: false,
             panic_mode: false,
-        };
+            errors: Vec::new(),
+        }
+    }
 
-        parser.init_compiler();
+    fn compile(&mut self) -> Option<Function> {
+        self.advance();
 
-        parser.advance();
-
-        while !parser.check_advance(TokenType::Eof) {
-            parser.declaration();
+        while !self.check_advance(TokenType::Eof) {
+            self.declaration();
         }
 
-        let function = parser.end_compiler();
-        if parser.had_error {
+        let function = self.pop_compiler();
+        if self.had_error {
             None
         } else {
             Some(function)
         }
     }
 
-    fn init_compiler(&mut self) {
-        if let FunctionType::Function = self.compiler.function_type {
-            self.compiler.function.name = Rc::new(self.previous.value.to_string());
-        }
+    fn push_compiler(&mut self, ftype: FunctionType) {
+        let name = self.previous.value.to_string();
+        let new_compiler = Compiler::new(ftype, Rc::new(name));
+        let old_compiler = mem::replace(&mut self.compiler, new_compiler);
+        self.compiler.enclosing = Some(old_compiler);
     }
 
-    fn new_compiler(&mut self, ftype: FunctionType) {
-        let compiler = mem::replace(&mut self.compiler, Box::new(Compiler::from(ftype)));
-        self.compiler.enclosing = Some(compiler);
+    fn pop_compiler(&mut self) -> Function {
+        self.emit_return();
 
-        self.init_compiler()
+        let function = match self.compiler.enclosing.take() {
+            Some(enclosing) => {
+                let compiler = mem::replace(&mut self.compiler, enclosing);
+                compiler.function
+            }
+            None => mem::take(&mut self.compiler.function),
+        };
+
+        #[cfg(feature = "debug_print_code")]
+        if !self.had_error {
+            let name = if function.name.as_str() != "" {
+                function.name.as_str()
+            } else {
+                "<script>"
+            };
+
+            function.chunk.disassemble(name);
+            println!();
+        }
+
+        function
     }
 
     fn advance(&mut self) {
@@ -181,14 +258,16 @@ impl<'a> Parser<'a> {
         self.emit_bytes(OpCode::OpConstant, index as u8)
     }
 
-    fn make_constant(&mut self, value: Value) -> usize {
+    fn make_constant(&mut self, value: Value) -> u8 {
         let index = self.chunk_mut().add_constant(value);
 
-        if index > u8::MAX as usize {
-            self.error("Too many constants in one chunk");
+        match u8::try_from(index) {
+            Ok(index) => index,
+            Err(_) => {
+                self.error("Too many constants in one chunk");
+                0
+            }
         }
-
-        index
     }
 
     fn patch_jump(&mut self, offset: usize) {
@@ -200,29 +279,6 @@ impl<'a> Parser<'a> {
 
         self.chunk_mut().code[offset] = (((jump >> 8) & 0xff) as u8).into();
         self.chunk_mut().code[offset + 1] = ((jump & 0xff) as u8).into();
-    }
-
-    fn end_compiler(&mut self) -> Function {
-        self.emit_return();
-
-        let function = mem::take(&mut self.compiler.function);
-
-        #[cfg(feature = "debug_print_code")]
-        if !self.had_error {
-            let name = if function.name.as_str() != "" {
-                function.name.as_str()
-            } else {
-                "<script>"
-            };
-
-            debug::disassemble_chunk(&function.chunk, name);
-        }
-
-        if let Some(enclosing) = self.compiler.enclosing.take() {
-            self.compiler = enclosing;
-        }
-
-        function
     }
 
     fn expression(&mut self) {
@@ -407,13 +463,13 @@ impl<'a> Parser<'a> {
     }
 
     fn function(&mut self, ftype: FunctionType) {
-        self.new_compiler(ftype);
+        self.push_compiler(ftype);
         self.begin_scope();
 
         self.consume(TokenType::LeftParen, "Expect '(' after function name.");
         if !self.check(TokenType::RightParen) {
             loop {
-                if self.compiler.function.arity == u8::MAX {
+                if self.compiler.function.arity == 255 {
                     self.error_at_current("Can't have more than 255 parameters.");
                 }
 
@@ -432,23 +488,33 @@ impl<'a> Parser<'a> {
         self.consume(TokenType::LeftBrace, "Expect '{' before function body.");
         self.block();
 
-        let function = self.end_compiler();
-        let index = self.make_constant(function.into());
-        self.emit_bytes(OpCode::OpConstant, index as u8);
+        let function = self.pop_compiler();
+
+        let index = self.make_constant(function.clone().into());
+        self.emit_bytes(OpCode::OpClosure, index);
+
+        for upvalue in function.upvalues {
+            self.emit_byte(upvalue.is_local as u8);
+            self.emit_byte(upvalue.index);
+        }
     }
 
     fn begin_scope(&mut self) {
-        self.compiler.scope += 1;
+        self.compiler.scope_depth += 1;
     }
 
     fn end_scope(&mut self) {
-        self.compiler.scope -= 1;
+        self.compiler.scope_depth -= 1;
 
-        while self.compiler.count > 0
-            && self.compiler.locals[self.compiler.count - 1].depth > self.compiler.scope
-        {
-            self.emit_byte(OpCode::OpPop);
-            self.compiler.count -= 1;
+        for i in (0..self.compiler.locals.len()).rev() {
+            if self.compiler.locals[i].depth > self.compiler.scope_depth {
+                if self.compiler.locals[i].is_captured {
+                    self.emit_byte(OpCode::OpCloseUpvalue);
+                } else {
+                    self.emit_byte(OpCode::OpPop);
+                }
+                self.compiler.locals.pop();
+            }
         }
     }
 
@@ -466,14 +532,22 @@ impl<'a> Parser<'a> {
         self.emit_constant(self.previous.value.into());
     }
 
-    fn named_variable(&mut self, name: Value, can_assign: bool) {
-        let str_name: String = name.clone().into();
-        let mut arg = self.resolve_local(&str_name);
-        let (get_op, set_op) = if arg != usize::MAX {
-            (OpCode::OpGetLocal, OpCode::OpSetLocal)
+    fn named_variable(&mut self, name: &str, can_assign: bool) {
+        let get_op;
+        let set_op;
+
+        let arg = if let Some(arg) = self.resolve_local(name) {
+            get_op = OpCode::OpGetLocal;
+            set_op = OpCode::OpSetLocal;
+            arg
+        } else if let Some(arg) = self.resolve_upvalue(name) {
+            get_op = OpCode::OpGetUpvalue;
+            set_op = OpCode::OpSetUpvalue;
+            arg
         } else {
-            arg = self.identifier_constant(name);
-            (OpCode::OpGetGlobal, OpCode::OpSetGlobal)
+            get_op = OpCode::OpGetGlobal;
+            set_op = OpCode::OpSetGlobal;
+            self.identifier_constant(name)
         };
 
         if can_assign && self.check_advance(TokenType::Equal) {
@@ -485,7 +559,7 @@ impl<'a> Parser<'a> {
     }
 
     fn variable(&mut self, can_assign: bool) {
-        let previous = self.previous.value.into();
+        let previous = self.previous.value;
         self.named_variable(previous, can_assign)
     }
 
@@ -562,7 +636,7 @@ impl<'a> Parser<'a> {
     }
 
     fn define_variable(&mut self, global: u8) {
-        if self.compiler.scope > 0 {
+        if self.compiler.scope_depth > 0 {
             self.mark_initialized();
             return;
         }
@@ -613,70 +687,64 @@ impl<'a> Parser<'a> {
         self.consume(TokenType::Identifier, message);
 
         self.declare_variable();
-        if self.compiler.scope > 0 {
+        if self.compiler.scope_depth > 0 {
             return 0;
         }
 
-        let name = self.previous.value.into();
-        self.identifier_constant(name) as u8
+        let name = self.previous.value;
+        self.identifier_constant(name)
     }
 
     fn mark_initialized(&mut self) {
-        if self.compiler.scope == 0 {
+        if self.compiler.scope_depth == 0 {
             return;
         }
 
-        self.compiler.locals[self.compiler.count - 1].depth = self.compiler.scope;
+        self.compiler.locals.last_mut().unwrap().depth = self.compiler.scope_depth;
     }
 
-    fn identifier_constant(&mut self, name: Value) -> usize {
-        self.make_constant(name)
+    fn identifier_constant(&mut self, name: &str) -> u8 {
+        let value = name.into();
+        self.make_constant(value)
     }
 
-    fn resolve_local(&mut self, name: &str) -> usize {
-        for i in (0..self.compiler.count).rev() {
-            let local = &self.compiler.locals[i];
-            if name == local.name.value {
-                if local.depth == usize::MAX {
-                    self.error("Can't read local variable in its own own initializer.");
-                }
-                return i;
-            }
+    fn resolve_local(&mut self, name: &str) -> Option<u8> {
+        let result = self.compiler.resolve_local(name, &mut self.errors);
+        while let Some(e) = self.errors.pop() {
+            self.error(e);
         }
 
-        usize::MAX
+        result
     }
 
-    fn add_local(&mut self, name: Token<'a>) {
-        if self.compiler.count == u8::MAX as usize {
+    fn resolve_upvalue(&mut self, name: &str) -> Option<u8> {
+        let result = self.compiler.resolve_upvalue(name, &mut self.errors);
+        while let Some(e) = self.errors.pop() {
+            self.error(e);
+        }
+
+        result
+    }
+
+    fn add_local(&mut self, name: &'a str) {
+        if self.compiler.locals.len() == u8::MAX as usize {
             self.error("Too many local variables in function.");
             return;
         }
 
-        let local = Local {
-            name,
-            depth: usize::MAX,
-        };
-
-        self.compiler.locals[self.compiler.count] = local;
-        self.compiler.count += 1;
+        let local = Local::new(name, -1);
+        self.compiler.locals.push(local);
     }
 
     fn declare_variable(&mut self) {
-        if self.compiler.scope == 0 {
+        if self.compiler.scope_depth == 0 {
             return;
         }
 
-        let name = self.previous.clone();
-        for i in (0..self.compiler.count).rev() {
-            let local = &self.compiler.locals[i];
-            if local.depth != usize::MAX && local.depth < self.compiler.scope {
-                break;
-            }
+        let name = self.previous.value;
 
-            if name.value == local.name.value {
-                self.error("Already a variable with this name in this scope.");
-            }
+        if self.compiler.is_local_declared(name) {
+            self.error("Already a variable with this name in this scope.");
         }
 
         self.add_local(name);
@@ -824,4 +892,9 @@ impl<'a> ParseRule<'a> {
             TokenType::Eof => Self::new(None, None, Precedence::None),
         }
     }
+}
+
+pub fn compile(source: &str) -> Option<Function> {
+    let mut parser = Parser::new(source);
+    parser.compile()
 }

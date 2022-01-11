@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::rc::Rc;
 
@@ -9,44 +10,81 @@ pub enum Value {
     Bool(bool),
     Number(f64),
     String(Rc<String>),
-    Function(Rc<Function>),
     Native(Rc<Native>),
+    Closure(Rc<RefCell<Closure>>),
 }
 
 #[derive(Clone)]
 pub struct Function {
-    pub arity: u8,
+    pub arity: usize,
     pub chunk: Chunk,
     pub name: Rc<String>,
+    pub upvalues: Vec<FnUpvalue>,
 }
 
-pub type NativeFn = fn(u8, &[Value]) -> Value;
+pub type NativeFn = fn(usize, &[Value]) -> Value;
 
 pub struct Native {
-    pub arity: u8,
+    pub arity: usize,
     pub name: Rc<String>,
     pub function: NativeFn,
 }
 
+pub struct Closure {
+    pub function: Function,
+    pub upvalues: Vec<Rc<RefCell<Upvalue>>>,
+}
+
+#[derive(Clone)]
+pub struct FnUpvalue {
+    pub index: u8,
+    pub is_local: bool,
+}
+
+#[derive(Clone)]
+pub struct Upvalue {
+    pub location: usize,
+    pub closed: Option<Value>,
+}
+
+impl Upvalue {
+    pub fn new(location: usize) -> Self {
+        Self {
+            location,
+            closed: None,
+        }
+    }
+}
+
+impl Closure {
+    pub fn new(function: Function) -> RefCell<Closure> {
+        RefCell::new(Self {
+            upvalues: Vec::with_capacity(function.upvalues.len()),
+            function,
+        })
+    }
+}
+
 impl Function {
-    pub fn new() -> Self {
+    pub fn new(name: Rc<String>) -> Self {
         Self {
             chunk: Chunk::new(),
             arity: 0,
-            name: Rc::new(String::new()),
+            upvalues: Vec::new(),
+            name,
         }
+    }
+}
+
+impl Default for Function {
+    fn default() -> Self {
+        Self::new(Rc::new(String::from("script")))
     }
 }
 
 impl Display for Native {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<native fn {}>", self.name)
-    }
-}
-
-impl Default for Function {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -72,8 +110,10 @@ impl PartialEq for Value {
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Number(a), Self::Number(b)) => a == b,
             (Self::String(a), Self::String(b)) => a == b,
-            (Self::Function(a), Self::Function(b)) => a.name == b.name,
             (Self::Native(a), Self::Native(b)) => a.name == b.name,
+            (Self::Closure(a), Self::Closure(b)) => {
+                a.borrow().function.name == b.borrow().function.name
+            }
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
@@ -88,8 +128,8 @@ impl Display for Value {
             Bool(val) => write!(f, "{}", val),
             Number(val) => write!(f, "{}", val),
             String(val) => write!(f, "{}", val),
-            Function(val) => write!(f, "{}", val),
             Native(val) => write!(f, "{}", val),
+            Closure(val) => write!(f, "{}", val.borrow().function),
         }
     }
 }
@@ -120,7 +160,7 @@ impl From<String> for Value {
 
 impl From<Function> for Value {
     fn from(f: Function) -> Self {
-        Value::Function(Rc::new(f))
+        Value::Closure(Rc::new(Closure::new(f)))
     }
 }
 
@@ -133,6 +173,12 @@ impl From<Native> for Value {
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
         Self::String(Rc::new(String::from(s)))
+    }
+}
+
+impl From<Rc<RefCell<Closure>>> for Value {
+    fn from(c: Rc<RefCell<Closure>>) -> Self {
+        Value::Closure(c)
     }
 }
 

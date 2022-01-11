@@ -1,35 +1,40 @@
-use super::chunk::{Chunk, OpCode};
-use super::compiler::Parser;
-use super::native::*;
-use super::table::Table;
-use super::value::{Function, Native, NativeFn, Value};
+use crate::chunk::OpCode;
+use crate::compiler::compile;
+use crate::native::*;
+use crate::table::Table;
+use crate::value::{Closure, Native, NativeFn, Upvalue, Value};
 
+use std::cell::{Ref, RefCell};
 use std::collections::hash_map::Entry;
-use std::mem;
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 #[cfg(feature = "debug_trace_execution")]
-use super::debug;
+use crate::debug;
 
 const FRAME_MAX: usize = 64;
 const STACK_MAX: usize = FRAME_MAX * 256;
 
 pub struct VM {
     frames: Vec<CallFrame>,
-    stack: [Value; STACK_MAX],
-    stack_top: usize,
+    stack: Vec<Value>,
     globals: Table,
+    open_upvalues: VecDeque<Rc<RefCell<Upvalue>>>,
 }
 
 struct CallFrame {
-    function: Rc<Function>,
+    closure: Rc<RefCell<Closure>>,
     ip: usize,
     slot: usize,
 }
 
 impl CallFrame {
-    fn from(function: Rc<Function>, ip: usize, slot: usize) -> Self {
-        Self { function, ip, slot }
+    fn new(closure: Rc<RefCell<Closure>>, slot: usize) -> Self {
+        Self {
+            closure,
+            ip: 0,
+            slot,
+        }
     }
 }
 
@@ -77,9 +82,9 @@ impl VM {
     pub fn new() -> Self {
         let mut vm = Self {
             frames: Vec::with_capacity(FRAME_MAX),
-            stack: unsafe { mem::zeroed() },
-            stack_top: 0,
+            stack: Vec::with_capacity(STACK_MAX),
             globals: Table::new(),
+            open_upvalues: VecDeque::new(),
         };
 
         vm.define_native("clock", 0, clock_native);
@@ -87,40 +92,39 @@ impl VM {
     }
 
     fn read_byte(&mut self) -> OpCode {
-        self.frame_mut().ip += 1;
-        self.chunk().code[self.frame().ip - 1]
+        self.current_frame_mut().ip += 1;
+        self.current_closure().function.chunk.code[self.current_frame().ip - 1]
     }
 
     fn read_short(&mut self) -> usize {
-        self.frame_mut().ip += 2;
-        (self.chunk().code[self.frame().ip - 2] as usize) << 8
-            | self.chunk().code[self.frame().ip - 1] as usize
+        self.current_frame_mut().ip += 2;
+        (self.current_closure().function.chunk.code[self.current_frame().ip - 2] as usize) << 8
+            | self.current_closure().function.chunk.code[self.current_frame().ip - 1] as usize
     }
 
     fn read_constant(&mut self) -> Value {
         let index = self.read_byte() as usize;
-        self.chunk().constants[index].clone()
+        self.current_closure().function.chunk.constants[index].clone()
     }
 
     fn push(&mut self, value: Value) {
-        self.stack[self.stack_top] = value;
-        self.stack_top += 1;
+        self.stack.push(value);
     }
 
     fn pop(&mut self) -> Value {
-        self.stack_top -= 1;
-        mem::take(&mut self.stack[self.stack_top])
+        self.stack.pop().unwrap()
     }
 
     fn peek(&self, distance: usize) -> &Value {
-        &self.stack[self.stack_top - 1 - distance]
+        &self.stack[self.stack.len() - distance - 1]
     }
 
-    fn call(&mut self, function: Rc<Function>, arg_count: u8) -> bool {
-        if arg_count != function.arity {
+    fn call(&mut self, closure: Rc<RefCell<Closure>>, arg_count: usize) -> bool {
+        if arg_count != closure.borrow().function.arity {
             self.runtime_error(&format!(
                 "Expected {} arguments but got {}.",
-                function.arity, arg_count
+                closure.borrow().function.arity,
+                arg_count
             ));
             return false;
         }
@@ -130,21 +134,19 @@ impl VM {
             return false;
         }
 
-        let frame = CallFrame::from(function, 0, self.stack_top - arg_count as usize - 1);
+        let frame = CallFrame::new(closure, self.stack.len() - arg_count as usize - 1);
         self.frames.push(frame);
 
         true
     }
 
-    fn call_value(&mut self, callee: Value, arg_count: u8) -> bool {
+    fn call_value(&mut self, callee: Value, arg_count: usize) -> bool {
         match callee {
-            Value::Function(function) => self.call(function, arg_count),
+            Value::Closure(closure) => self.call(closure, arg_count),
             Value::Native(function) => {
-                let value = (function.function)(
-                    arg_count,
-                    &self.stack[(self.stack_top - arg_count as usize)..],
-                );
-                self.stack_top -= arg_count as usize + 1;
+                let offset = self.stack.len() - arg_count as usize;
+                let value = (function.function)(arg_count, &self.stack[offset..]);
+                self.stack.truncate(offset - 1);
                 self.push(value);
                 true
             }
@@ -155,16 +157,43 @@ impl VM {
         }
     }
 
+    fn capture_upvalue(&mut self, location: usize) -> Rc<RefCell<Upvalue>> {
+        for upvalue in &self.open_upvalues {
+            if upvalue.borrow().location == location {
+                return upvalue.clone();
+            }
+        }
+
+        let upvalue = Upvalue::new(location);
+        let upvalue = Rc::new(RefCell::new(upvalue));
+
+        self.open_upvalues.push_back(upvalue.clone());
+        upvalue
+    }
+
+    fn close_upvalues(&mut self, last: usize) {
+        while self
+            .open_upvalues
+            .front()
+            .map_or(false, |uv| uv.borrow().location >= last)
+        {
+            let upvalue = self.open_upvalues.pop_front().unwrap();
+            let location = upvalue.borrow().location;
+            upvalue.borrow_mut().closed = Some(self.stack[location].clone());
+        }
+    }
+
     fn reset_stack(&mut self) {
-        self.stack_top = 0;
+        self.stack.clear();
         self.frames.clear();
+        self.open_upvalues.clear();
     }
 
     fn runtime_error(&mut self, message: &str) {
         eprintln!("{}", message);
 
         for frame in self.frames.iter().rev() {
-            let function = &frame.function;
+            let function = &frame.closure.borrow().function;
             let index = frame.ip - 1;
             eprint!("[line {}] in ", function.chunk.lines[index]);
             if function.name.as_str() == "" {
@@ -177,7 +206,7 @@ impl VM {
         self.reset_stack();
     }
 
-    fn define_native(&mut self, name: &str, arity: u8, native: NativeFn) {
+    fn define_native(&mut self, name: &str, arity: usize, native: NativeFn) {
         let function = Native {
             name: Rc::new(name.to_string()),
             arity,
@@ -187,34 +216,28 @@ impl VM {
         self.globals.insert(name.into(), function.into());
     }
 
-    fn frame(&self) -> &CallFrame {
+    fn current_frame(&self) -> &CallFrame {
         self.frames.last().unwrap()
     }
 
-    fn frame_mut(&mut self) -> &mut CallFrame {
+    fn current_frame_mut(&mut self) -> &mut CallFrame {
         self.frames.last_mut().unwrap()
     }
 
-    fn chunk(&self) -> &Chunk {
-        &self.frame().function.chunk
+    fn current_closure(&self) -> Ref<Closure> {
+        self.current_frame().closure.borrow()
     }
 
     pub fn interpret(&mut self, source: &str) -> InterpretResult {
-        let function = Parser::compile(source);
+        let function = compile(source);
         if function.is_none() {
             return InterpretResult::CompileError;
         }
-
         let function = function.unwrap();
-        self.push(function.clone().into());
 
-        let frame = CallFrame {
-            function: Rc::new(function),
-            ip: 0,
-            slot: 0,
-        };
-
-        self.frames.push(frame);
+        let closure = Rc::new(Closure::new(function));
+        self.push(closure.clone().into());
+        self.frames.push(CallFrame::new(closure, 0));
 
         self.run()
     }
@@ -226,13 +249,13 @@ impl VM {
             #[cfg(feature = "debug_trace_execution")]
             {
                 print!("          ");
-                for index in 0..self.stack_top {
-                    print!("[ {} ]", self.stack[index])
+                for value in &self.stack {
+                    print!("[ {} ]", value)
                 }
                 println!();
 
-                let ip = self.frame().ip;
-                debug::disassemble_instruction(self.chunk(), ip);
+                let ip = self.current_frame().ip;
+                debug::disassemble_instruction(&self.current_closure().function.chunk, ip);
             }
 
             let instruction = self.read_byte();
@@ -249,12 +272,13 @@ impl VM {
                 }
                 OpGetLocal => {
                     let slot = self.read_byte();
-                    let value = self.stack[self.frame().slot + slot as usize].clone();
+                    let value = self.stack[self.current_frame().slot + slot as usize].clone();
                     self.push(value);
                 }
                 OpSetLocal => {
                     let slot = self.read_byte();
-                    self.stack[self.frame().slot + slot as usize] = self.peek(0).clone();
+                    let index = self.current_frame().slot + slot as usize;
+                    self.stack[index] = self.peek(0).clone();
                 }
                 OpGetGlobal => {
                     let name: String = self.read_constant().into();
@@ -283,6 +307,38 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
+                OpGetUpvalue => {
+                    let slot = self.read_byte();
+                    let value = {
+                        let current_closure = self.current_closure();
+                        let upvalue = current_closure.upvalues[slot as usize].borrow();
+                        if let Some(value) = &upvalue.closed {
+                            value.clone()
+                        } else {
+                            self.stack[upvalue.location].clone()
+                        }
+                    };
+
+                    self.push(value)
+                }
+                OpSetUpvalue => {
+                    let slot = self.read_byte();
+                    let value = self.peek(0).clone();
+                    let mut change_stack = None;
+                    {
+                        let current_closure = self.current_closure();
+                        let mut upvalue = current_closure.upvalues[slot as usize].borrow_mut();
+                        if upvalue.closed.is_none() {
+                            change_stack = Some((upvalue.location, value));
+                        } else {
+                            upvalue.closed = Some(value);
+                        }
+                    }
+
+                    if let Some((location, value)) = change_stack {
+                        self.stack[location] = value;
+                    }
+                }
                 OpEqual => {
                     let b = self.pop();
                     let a = self.pop();
@@ -309,36 +365,60 @@ impl VM {
                 OpPrint => println!("{}", self.pop()),
                 OpJump => {
                     let offset = self.read_short();
-                    self.frame_mut().ip += offset;
+                    self.current_frame_mut().ip += offset;
                 }
                 OpJumpIfFalse => {
                     let offset = self.read_short();
                     if self.peek(0).is_falsey() {
-                        self.frame_mut().ip += offset;
+                        self.current_frame_mut().ip += offset;
                     }
                 }
                 OpLoop => {
                     let offset = self.read_short();
-                    self.frame_mut().ip -= offset;
+                    self.current_frame_mut().ip -= offset;
                 }
                 OpCall => {
-                    let arg_count = self.read_byte() as u8;
+                    let arg_count = self.read_byte();
                     let value = self.peek(arg_count as usize).clone();
-                    if !self.call_value(value, arg_count) {
+                    if !self.call_value(value, arg_count as usize) {
                         return InterpretResult::RuntimeError;
                     }
                 }
+                OpClosure => {
+                    if let Value::Closure(closure) = self.read_constant() {
+                        let length = closure.borrow().function.upvalues.len();
+                        for _ in 0..length {
+                            let is_local = self.read_byte() as u8;
+                            let index = self.read_byte() as usize;
+
+                            let upvalue = if is_local == 1 {
+                                let upvalue_index = self.current_frame().slot + index;
+                                self.capture_upvalue(upvalue_index)
+                            } else {
+                                self.current_closure().upvalues[index as usize].clone()
+                            };
+
+                            closure.borrow_mut().upvalues.push(upvalue);
+                        }
+                        self.push(closure.clone().into());
+                    }
+                }
+                OpCloseUpvalue => {
+                    let top = self.stack.len() - 1;
+                    self.close_upvalues(top);
+                    self.pop();
+                }
                 OpReturn => {
                     let value = self.pop();
-                    let slot = self.frame().slot;
-
+                    let slot = self.current_frame().slot;
+                    self.close_upvalues(slot);
                     self.frames.pop();
                     if self.frames.is_empty() {
                         self.pop();
                         return InterpretResult::Ok;
                     }
 
-                    self.stack_top = slot;
+                    self.stack.truncate(slot);
                     self.push(value);
                 }
             }

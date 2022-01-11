@@ -1,5 +1,7 @@
-use super::debug::disassemble_chunk;
-use super::value::Value;
+use crate::value::Value;
+
+#[cfg(feature = "debug_print_code")]
+use crate::debug::disassemble_chunk;
 
 use std::mem;
 
@@ -16,6 +18,8 @@ pub enum OpCode {
     OpGetGlobal,
     OpDefineGlobal,
     OpSetGlobal,
+    OpGetUpvalue,
+    OpSetUpvalue,
     OpEqual,
     OpGreater,
     OpLess,
@@ -30,6 +34,8 @@ pub enum OpCode {
     OpJumpIfFalse,
     OpLoop,
     OpCall,
+    OpClosure,
+    OpCloseUpvalue,
     OpReturn,
 }
 
@@ -72,6 +78,7 @@ impl Chunk {
         index
     }
 
+    #[cfg(feature = "debug_print_code")]
     pub fn disassemble(&self, name: &str) {
         disassemble_chunk(self, name)
     }

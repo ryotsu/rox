@@ -1,4 +1,5 @@
-use super::chunk::{Chunk, OpCode};
+use crate::chunk::{Chunk, OpCode};
+use crate::value::Value;
 
 pub fn disassemble_chunk(chunk: &Chunk, name: &str) {
     println!("== {} ==", name);
@@ -9,7 +10,7 @@ pub fn disassemble_chunk(chunk: &Chunk, name: &str) {
     }
 }
 
-pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
+pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
     use OpCode::*;
 
     print!("{:04} ", offset);
@@ -32,6 +33,8 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         OpGetGlobal => constant_instruction("OP_GET_GLOBAL", chunk, offset),
         OpDefineGlobal => constant_instruction("OP_DEFINE_GLOBAL", chunk, offset),
         OpSetGlobal => constant_instruction("OP_SET_GLOBAL", chunk, offset),
+        OpGetUpvalue => byte_instruction("OP_GET_UPVALUE", chunk, offset),
+        OpSetUpvalue => byte_instruction("OP_SET_UPVALUE", chunk, offset),
         OpEqual => simple_instruction("OP_EQUAL", offset),
         OpGreater => simple_instruction("OP_GREATER", offset),
         OpLess => simple_instruction("OP_LESS", offset),
@@ -46,6 +49,26 @@ pub fn disassemble_instruction(chunk: &Chunk, offset: usize) -> usize {
         OpJumpIfFalse => jump_instruction("OP_JUMP_IF_FALSE", 1, chunk, offset),
         OpLoop => jump_instruction("OP_LOOP", -1, chunk, offset),
         OpCall => byte_instruction("OP_CALL", chunk, offset),
+        OpClosure => {
+            offset += 2;
+            let constant = chunk.code[offset - 1];
+            print!("{:<16} {:4} ", "OP_CLOSURE", constant as u8);
+            println!("{}", chunk.constants[constant as usize]);
+            if let Value::Closure(closure) = &chunk.constants[constant as usize] {
+                for _ in 0..closure.borrow().function.upvalues.len() {
+                    let is_local = if chunk.code[offset] as u8 == 1 {
+                        "local"
+                    } else {
+                        "upvalue"
+                    };
+                    let index = chunk.code[offset + 1] as usize;
+                    println!("{:04}    | {:>20}  {} {}", offset, " ", is_local, index);
+                    offset += 2;
+                }
+            }
+            offset
+        }
+        OpCloseUpvalue => simple_instruction("OP_CLOSE_UPVALUE", offset),
         OpReturn => simple_instruction("OP_RETURN", offset),
     }
 }
