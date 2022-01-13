@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::rc::Rc;
 
 use crate::chunk::Chunk;
+use crate::table::Table;
 
 #[derive(Clone)]
 pub enum Value {
@@ -12,6 +13,8 @@ pub enum Value {
     String(Rc<String>),
     Native(Rc<Native>),
     Closure(Rc<RefCell<Closure>>),
+    Class(Rc<Class>),
+    Instance(Rc<Instance>),
 }
 
 #[derive(Clone)]
@@ -45,6 +48,42 @@ pub struct FnUpvalue {
 pub struct Upvalue {
     pub location: usize,
     pub closed: Option<Value>,
+}
+
+pub struct Class {
+    pub name: Rc<String>,
+}
+
+pub struct Instance {
+    pub class: Rc<Class>,
+    pub fields: RefCell<Table>,
+}
+
+impl Instance {
+    pub fn new(class: Rc<Class>) -> Self {
+        Self {
+            class,
+            fields: RefCell::new(Table::new()),
+        }
+    }
+}
+
+impl Display for Instance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{} instance>", self.class)
+    }
+}
+
+impl Class {
+    pub fn new(name: Rc<String>) -> Self {
+        Class { name }
+    }
+}
+
+impl Display for Class {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
 }
 
 impl Upvalue {
@@ -130,6 +169,8 @@ impl Display for Value {
             String(val) => write!(f, "{}", val),
             Native(val) => write!(f, "{}", val),
             Closure(val) => write!(f, "{}", val.borrow().function),
+            Class(val) => write!(f, "{}", val),
+            Instance(val) => write!(f, "{}", val),
         }
     }
 }
@@ -158,6 +199,18 @@ impl From<String> for Value {
     }
 }
 
+impl From<Class> for Value {
+    fn from(c: Class) -> Self {
+        Value::Class(Rc::new(c))
+    }
+}
+
+impl From<Instance> for Value {
+    fn from(i: Instance) -> Self {
+        Value::Instance(Rc::new(i))
+    }
+}
+
 impl From<Function> for Value {
     fn from(f: Function) -> Self {
         Value::Closure(Rc::new(Closure::new(f)))
@@ -182,10 +235,27 @@ impl From<Rc<RefCell<Closure>>> for Value {
     }
 }
 
+impl From<Value> for Rc<Instance> {
+    fn from(v: Value) -> Self {
+        match v {
+            Value::Instance(i) => i,
+            _ => unimplemented!(),
+        }
+    }
+}
 impl From<Value> for String {
     fn from(value: Value) -> Self {
         match value {
             Value::String(s) => s.to_string(),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl From<Value> for Rc<String> {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::String(s) => s,
             _ => unimplemented!(),
         }
     }

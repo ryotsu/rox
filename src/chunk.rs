@@ -20,6 +20,8 @@ pub enum OpCode {
     OpSetGlobal,
     OpGetUpvalue,
     OpSetUpvalue,
+    OpGetProperty,
+    OpSetProperty,
     OpEqual,
     OpGreater,
     OpLess,
@@ -37,6 +39,7 @@ pub enum OpCode {
     OpClosure,
     OpCloseUpvalue,
     OpReturn,
+    OpClass,
 }
 
 impl From<u8> for OpCode {

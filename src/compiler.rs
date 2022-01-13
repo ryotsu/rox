@@ -134,7 +134,7 @@ impl<'a> Parser<'a> {
     fn compile(&mut self) -> Option<Function> {
         self.advance();
 
-        while !self.check_advance(TokenType::Eof) {
+        while !self.matches(TokenType::Eof) {
             self.declaration();
         }
 
@@ -205,7 +205,7 @@ impl<'a> Parser<'a> {
         self.current.kind == kind
     }
 
-    fn check_advance(&mut self, kind: TokenType) -> bool {
+    fn matches(&mut self, kind: TokenType) -> bool {
         if !self.check(kind) {
             return false;
         }
@@ -255,7 +255,7 @@ impl<'a> Parser<'a> {
 
     fn emit_constant(&mut self, value: Value) {
         let index = self.make_constant(value);
-        self.emit_bytes(OpCode::OpConstant, index as u8)
+        self.emit_bytes(OpCode::OpConstant, index)
     }
 
     fn make_constant(&mut self, value: Value) -> u8 {
@@ -292,17 +292,17 @@ impl<'a> Parser<'a> {
     }
 
     fn statement(&mut self) {
-        if self.check_advance(TokenType::Print) {
+        if self.matches(TokenType::Print) {
             self.print_statement();
-        } else if self.check_advance(TokenType::For) {
+        } else if self.matches(TokenType::For) {
             self.for_statement();
-        } else if self.check_advance(TokenType::If) {
+        } else if self.matches(TokenType::If) {
             self.if_statement();
-        } else if self.check_advance(TokenType::Return) {
+        } else if self.matches(TokenType::Return) {
             self.return_statement();
-        } else if self.check_advance(TokenType::While) {
+        } else if self.matches(TokenType::While) {
             self.while_statement();
-        } else if self.check_advance(TokenType::LeftBrace) {
+        } else if self.matches(TokenType::LeftBrace) {
             self.begin_scope();
             self.block();
             self.end_scope();
@@ -322,7 +322,7 @@ impl<'a> Parser<'a> {
             self.error("Can't return from top-level code.");
         }
 
-        if self.check_advance(TokenType::Semicolon) {
+        if self.matches(TokenType::Semicolon) {
             self.emit_return();
         } else {
             self.expression();
@@ -336,8 +336,8 @@ impl<'a> Parser<'a> {
 
         self.consume(TokenType::LeftParen, "Expect '(' after 'for'.");
 
-        if self.check_advance(TokenType::Semicolon) {
-        } else if self.check_advance(TokenType::Var) {
+        if self.matches(TokenType::Semicolon) {
+        } else if self.matches(TokenType::Var) {
             self.var_declaration();
         } else {
             self.expression_statement();
@@ -345,7 +345,7 @@ impl<'a> Parser<'a> {
 
         let mut loop_start = self.chunk_mut().code.len();
         let mut exit_jump = usize::MAX;
-        if !self.check_advance(TokenType::Semicolon) {
+        if !self.matches(TokenType::Semicolon) {
             self.expression();
             self.consume(TokenType::Semicolon, "Expect ';' after loop condition.");
 
@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
             self.emit_byte(OpCode::OpPop);
         }
 
-        if !self.check_advance(TokenType::RightParen) {
+        if !self.matches(TokenType::RightParen) {
             let body_jump = self.emit_jump(OpCode::OpJump);
             let increment_start = self.chunk_mut().code.len();
 
@@ -392,7 +392,7 @@ impl<'a> Parser<'a> {
         self.patch_jump(then_jump);
         self.emit_byte(OpCode::OpPop);
 
-        if self.check_advance(TokenType::Else) {
+        if self.matches(TokenType::Else) {
             self.statement();
         }
 
@@ -417,9 +417,11 @@ impl<'a> Parser<'a> {
     }
 
     fn declaration(&mut self) {
-        if self.check_advance(TokenType::Fun) {
+        if self.matches(TokenType::Class) {
+            self.class_declaration();
+        } else if self.matches(TokenType::Fun) {
             self.function_declaration();
-        } else if self.check_advance(TokenType::Var) {
+        } else if self.matches(TokenType::Var) {
             self.var_declaration();
         } else {
             self.statement();
@@ -433,7 +435,7 @@ impl<'a> Parser<'a> {
     fn var_declaration(&mut self) {
         let global = self.parse_variable("Expect a variable name.");
 
-        if self.check_advance(TokenType::Equal) {
+        if self.matches(TokenType::Equal) {
             self.expression();
         } else {
             self.emit_byte(OpCode::OpNil);
@@ -478,7 +480,7 @@ impl<'a> Parser<'a> {
                 let constant = self.parse_variable("Expect parameter name.");
                 self.define_variable(constant);
 
-                if !self.check_advance(TokenType::Comma) {
+                if !self.matches(TokenType::Comma) {
                     break;
                 }
             }
@@ -497,6 +499,18 @@ impl<'a> Parser<'a> {
             self.emit_byte(upvalue.is_local as u8);
             self.emit_byte(upvalue.index);
         }
+    }
+
+    fn class_declaration(&mut self) {
+        self.consume(TokenType::Identifier, "Expect class name.");
+        let name_const = self.identifier_constant(self.previous.value);
+        self.declare_variable();
+
+        self.emit_bytes(OpCode::OpClass, name_const);
+        self.define_variable(name_const);
+
+        self.consume(TokenType::LeftBrace, "Expect '{' before class body.");
+        self.consume(TokenType::RightBrace, "Expect '}' after class body.");
     }
 
     fn begin_scope(&mut self) {
@@ -550,11 +564,11 @@ impl<'a> Parser<'a> {
             self.identifier_constant(name)
         };
 
-        if can_assign && self.check_advance(TokenType::Equal) {
+        if can_assign && self.matches(TokenType::Equal) {
             self.expression();
-            self.emit_bytes(set_op, arg as u8);
+            self.emit_bytes(set_op, arg);
         } else {
-            self.emit_bytes(get_op, arg as u8);
+            self.emit_bytes(get_op, arg);
         }
     }
 
@@ -613,6 +627,18 @@ impl<'a> Parser<'a> {
         self.emit_bytes(OpCode::OpCall, arg_count);
     }
 
+    fn dot(&mut self, can_assign: bool) {
+        self.consume(TokenType::Identifier, "Expect property name after '.'");
+        let name = self.identifier_constant(self.previous.value);
+
+        if can_assign && self.matches(TokenType::Equal) {
+            self.expression();
+            self.emit_bytes(OpCode::OpSetProperty, name);
+        } else {
+            self.emit_bytes(OpCode::OpGetProperty, name);
+        }
+    }
+
     fn parse_precedence(&mut self, precedence: Precedence) {
         self.advance();
 
@@ -630,7 +656,7 @@ impl<'a> Parser<'a> {
             infix_rule(self, can_assign);
         }
 
-        if can_assign && self.check_advance(TokenType::Equal) {
+        if can_assign && self.matches(TokenType::Equal) {
             self.error("Invalid assignment target.");
         }
     }
@@ -653,7 +679,7 @@ impl<'a> Parser<'a> {
                     self.error("Can't have more than 255 arguments.");
                 }
                 arg_count += 1;
-                if !self.check_advance(TokenType::Comma) {
+                if !self.matches(TokenType::Comma) {
                     break;
                 }
             }
@@ -851,7 +877,7 @@ impl<'a> ParseRule<'a> {
             TokenType::LeftBrace => Self::new(None, None, Precedence::None),
             TokenType::RightBrace => Self::new(None, None, Precedence::None),
             TokenType::Comma => Self::new(None, None, Precedence::None),
-            TokenType::Dot => Self::new(None, None, Precedence::None),
+            TokenType::Dot => Self::new(None, Some(Parser::dot), Precedence::Call),
             TokenType::Minus => {
                 Self::new(Some(Parser::unary), Some(Parser::binary), Precedence::Term)
             }

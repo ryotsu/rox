@@ -2,7 +2,7 @@ use crate::chunk::OpCode;
 use crate::compiler::compile;
 use crate::native::*;
 use crate::table::Table;
-use crate::value::{Closure, Native, NativeFn, Upvalue, Value};
+use crate::value::{Class, Closure, Instance, Native, NativeFn, Upvalue, Value};
 
 use std::cell::{Ref, RefCell};
 use std::collections::hash_map::Entry;
@@ -134,7 +134,7 @@ impl VM {
             return false;
         }
 
-        let frame = CallFrame::new(closure, self.stack.len() - arg_count as usize - 1);
+        let frame = CallFrame::new(closure, self.stack.len() - arg_count - 1);
         self.frames.push(frame);
 
         true
@@ -142,9 +142,14 @@ impl VM {
 
     fn call_value(&mut self, callee: Value, arg_count: usize) -> bool {
         match callee {
+            Value::Class(class) => {
+                let slot = self.stack.len() - arg_count - 1;
+                self.stack[slot] = Instance::new(class).into();
+                true
+            }
             Value::Closure(closure) => self.call(closure, arg_count),
             Value::Native(function) => {
-                let offset = self.stack.len() - arg_count as usize;
+                let offset = self.stack.len() - arg_count;
                 let value = (function.function)(arg_count, &self.stack[offset..]);
                 self.stack.truncate(offset - 1);
                 self.push(value);
@@ -339,6 +344,43 @@ impl VM {
                         self.stack[location] = value;
                     }
                 }
+                OpGetProperty => {
+                    match self.peek(0) {
+                        Value::Instance(_) => (),
+                        _ => {
+                            self.runtime_error("Only instances have properties.");
+                            return InterpretResult::RuntimeError;
+                        }
+                    }
+
+                    let instance: Rc<Instance> = self.peek(0).clone().into();
+                    let name: String = self.read_constant().into();
+                    if let Some(value) = instance.fields.borrow().get(&name) {
+                        self.pop();
+                        self.push(value.clone())
+                    } else {
+                        self.runtime_error(&format!("Undefined property '{}'.", name));
+                        return InterpretResult::RuntimeError;
+                    };
+                }
+
+                OpSetProperty => {
+                    match self.peek(1) {
+                        Value::Instance(_) => (),
+                        _ => {
+                            self.runtime_error("Only instances have properties.");
+                            return InterpretResult::RuntimeError;
+                        }
+                    }
+
+                    let instance: Rc<Instance> = self.peek(1).clone().into();
+                    let name: String = self.read_constant().into();
+                    let value = self.peek(0).clone();
+                    instance.fields.borrow_mut().insert(name, value);
+                    let value = self.pop();
+                    self.pop();
+                    self.push(value);
+                }
                 OpEqual => {
                     let b = self.pop();
                     let a = self.pop();
@@ -395,7 +437,7 @@ impl VM {
                                 let upvalue_index = self.current_frame().slot + index;
                                 self.capture_upvalue(upvalue_index)
                             } else {
-                                self.current_closure().upvalues[index as usize].clone()
+                                self.current_closure().upvalues[index].clone()
                             };
 
                             closure.borrow_mut().upvalues.push(upvalue);
@@ -420,6 +462,11 @@ impl VM {
 
                     self.stack.truncate(slot);
                     self.push(value);
+                }
+                OpClass => {
+                    let name = self.read_constant().into();
+                    let class = Class::new(name);
+                    self.push(class.into());
                 }
             }
         }

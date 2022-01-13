@@ -120,7 +120,7 @@ impl<'a> Scanner<'a> {
             self.advance();
         }
 
-        if self.source.peek() == None {
+        if self.source.peek().is_none() {
             return self.error_token("Unterminated string.");
         }
 
