@@ -2,7 +2,7 @@ use crate::chunk::OpCode;
 use crate::compiler::compile;
 use crate::native::*;
 use crate::table::Table;
-use crate::value::{Class, Closure, Instance, Native, NativeFn, Upvalue, Value};
+use crate::value::{BoundMethod, Class, Closure, Instance, Native, NativeFn, Upvalue, Value};
 
 use std::cell::{Ref, RefCell};
 use std::collections::hash_map::Entry;
@@ -20,8 +20,10 @@ pub struct VM {
     stack: Vec<Value>,
     globals: Table,
     open_upvalues: VecDeque<Rc<RefCell<Upvalue>>>,
+    init_string: &'static str,
 }
 
+#[derive(Clone)]
 struct CallFrame {
     closure: Rc<RefCell<Closure>>,
     ip: usize,
@@ -85,6 +87,7 @@ impl VM {
             stack: Vec::with_capacity(STACK_MAX),
             globals: Table::new(),
             open_upvalues: VecDeque::new(),
+            init_string: "init",
         };
 
         vm.define_native("clock", 0, clock_native);
@@ -142,9 +145,20 @@ impl VM {
 
     fn call_value(&mut self, callee: Value, arg_count: usize) -> bool {
         match callee {
+            Value::BoundMethod(bound) => {
+                let slot = self.stack.len() - arg_count - 1;
+                self.stack[slot] = bound.receiver.clone();
+                self.call(bound.method.clone(), arg_count)
+            }
             Value::Class(class) => {
                 let slot = self.stack.len() - arg_count - 1;
-                self.stack[slot] = Instance::new(class).into();
+                self.stack[slot] = Instance::new(class.clone()).into();
+                if let Some(Value::Closure(init)) = class.methods.borrow().get(self.init_string) {
+                    return self.call(init.clone(), arg_count);
+                } else if arg_count != 0 {
+                    self.runtime_error(&format!("Expected 0 arguments but got {}", arg_count));
+                    return false;
+                }
                 true
             }
             Value::Closure(closure) => self.call(closure, arg_count),
@@ -160,6 +174,41 @@ impl VM {
                 false
             }
         }
+    }
+
+    fn invoke_from_class(&mut self, class: Rc<Class>, name: String, arg_count: usize) -> bool {
+        if let Some(Value::Closure(method)) = class.methods.borrow().get(&name) {
+            return self.call(method.clone(), arg_count);
+        }
+
+        self.runtime_error(&format!("Undefined property '{}'.", name));
+        false
+    }
+
+    fn invoke(&mut self, name: String, arg_count: usize) -> bool {
+        if let Value::Instance(instance) = self.peek(arg_count).clone() {
+            if let Some(value) = instance.fields.borrow().get(&name) {
+                let slot = self.stack.len() - arg_count - 1;
+                self.stack[slot] = value.clone();
+                return self.call_value(value.clone(), arg_count);
+            }
+
+            return self.invoke_from_class(instance.class.clone(), name, arg_count);
+        }
+
+        self.runtime_error("Only instances have methods.");
+        false
+    }
+
+    fn bind_method(&mut self, class: Rc<Class>, name: String) -> bool {
+        if let Some(Value::Closure(method)) = class.methods.borrow().get(&name) {
+            let bound = BoundMethod::new(self.pop(), method.clone());
+            self.push(Value::BoundMethod(Rc::new(bound)));
+            return true;
+        }
+
+        self.runtime_error(&format!("Undefined property '{}'", name));
+        false
     }
 
     fn capture_upvalue(&mut self, location: usize) -> Rc<RefCell<Upvalue>> {
@@ -186,6 +235,14 @@ impl VM {
             let location = upvalue.borrow().location;
             upvalue.borrow_mut().closed = Some(self.stack[location].clone());
         }
+    }
+
+    fn define_method(&mut self, name: String) {
+        let method = self.peek(0).clone();
+        let class: Rc<Class> = self.peek(1).clone().into();
+
+        class.methods.borrow_mut().insert(name, method);
+        self.pop();
     }
 
     fn reset_stack(&mut self) {
@@ -345,32 +402,30 @@ impl VM {
                     }
                 }
                 OpGetProperty => {
-                    match self.peek(0) {
-                        Value::Instance(_) => (),
-                        _ => {
-                            self.runtime_error("Only instances have properties.");
-                            return InterpretResult::RuntimeError;
-                        }
+                    if let Value::Instance(_) = self.peek(0) {
+                    } else {
+                        self.runtime_error("Only instances have properties.");
+                        return InterpretResult::RuntimeError;
                     }
 
                     let instance: Rc<Instance> = self.peek(0).clone().into();
                     let name: String = self.read_constant().into();
                     if let Some(value) = instance.fields.borrow().get(&name) {
                         self.pop();
-                        self.push(value.clone())
-                    } else {
-                        self.runtime_error(&format!("Undefined property '{}'.", name));
+                        self.push(value.clone());
+                        continue;
+                    }
+
+                    if !self.bind_method(instance.class.clone(), name) {
                         return InterpretResult::RuntimeError;
-                    };
+                    }
                 }
 
                 OpSetProperty => {
-                    match self.peek(1) {
-                        Value::Instance(_) => (),
-                        _ => {
-                            self.runtime_error("Only instances have properties.");
-                            return InterpretResult::RuntimeError;
-                        }
+                    if let Value::Instance(_) = self.peek(1) {
+                    } else {
+                        self.runtime_error("Only instances have properties.");
+                        return InterpretResult::RuntimeError;
                     }
 
                     let instance: Rc<Instance> = self.peek(1).clone().into();
@@ -426,6 +481,14 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
+                OpInvoke => {
+                    let method: String = self.read_constant().into();
+                    let arg_count = self.read_byte() as usize;
+                    if !self.invoke(method, arg_count) {
+                        return InterpretResult::RuntimeError;
+                    }
+                    *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
+                }
                 OpClosure => {
                     if let Value::Closure(closure) = self.read_constant() {
                         let length = closure.borrow().function.upvalues.len();
@@ -467,6 +530,10 @@ impl VM {
                     let name = self.read_constant().into();
                     let class = Class::new(name);
                     self.push(class.into());
+                }
+                OpMethod => {
+                    let name: String = self.read_constant().into();
+                    self.define_method(name)
                 }
             }
         }

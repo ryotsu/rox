@@ -51,6 +51,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
         OpJumpIfFalse => jump_instruction("OP_JUMP_IF_FALSE", 1, chunk, offset),
         OpLoop => jump_instruction("OP_LOOP", -1, chunk, offset),
         OpCall => byte_instruction("OP_CALL", chunk, offset),
+        OpInvoke => invoke_instruction("OP_INVOKE", chunk, offset),
         OpClosure => {
             offset += 2;
             let constant = chunk.code[offset - 1];
@@ -73,6 +74,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
         OpCloseUpvalue => simple_instruction("OP_CLOSE_UPVALUE", offset),
         OpReturn => simple_instruction("OP_RETURN", offset),
         OpClass => constant_instruction("OP_CLASS", chunk, offset),
+        OpMethod => constant_instruction("OP_METHOD", chunk, offset),
     }
 }
 
@@ -86,6 +88,16 @@ fn constant_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {
     print!("{:<16} {:4} ", name, constant as u8);
     println!("'{}'", chunk.constants[constant as usize]);
     offset + 2
+}
+
+fn invoke_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {
+    let constant = chunk.code[offset + 1];
+    let arg_count = chunk.code[offset + 2];
+    println!(
+        "{:<16} ({} args) {:4} '{}'",
+        name, arg_count as u8, constant as u8, chunk.constants[constant as usize]
+    );
+    offset + 3
 }
 
 fn byte_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {

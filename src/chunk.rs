@@ -36,10 +36,13 @@ pub enum OpCode {
     OpJumpIfFalse,
     OpLoop,
     OpCall,
+
+    OpInvoke,
     OpClosure,
     OpCloseUpvalue,
     OpReturn,
     OpClass,
+    OpMethod,
 }
 
 impl From<u8> for OpCode {

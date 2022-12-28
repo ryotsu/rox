@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::rc::Rc;
 
 use crate::chunk::Chunk;
@@ -15,6 +15,7 @@ pub enum Value {
     Closure(Rc<RefCell<Closure>>),
     Class(Rc<Class>),
     Instance(Rc<Instance>),
+    BoundMethod(Rc<BoundMethod>),
 }
 
 #[derive(Clone)]
@@ -52,11 +53,17 @@ pub struct Upvalue {
 
 pub struct Class {
     pub name: Rc<String>,
+    pub methods: RefCell<Table>,
 }
 
 pub struct Instance {
     pub class: Rc<Class>,
     pub fields: RefCell<Table>,
+}
+
+pub struct BoundMethod {
+    pub receiver: Value,
+    pub method: Rc<RefCell<Closure>>,
 }
 
 impl Instance {
@@ -76,7 +83,10 @@ impl Display for Instance {
 
 impl Class {
     pub fn new(name: Rc<String>) -> Self {
-        Class { name }
+        Class {
+            name,
+            methods: RefCell::new(Table::new()),
+        }
     }
 }
 
@@ -115,6 +125,12 @@ impl Function {
     }
 }
 
+impl BoundMethod {
+    pub fn new(receiver: Value, method: Rc<RefCell<Closure>>) -> Self {
+        Self { receiver, method }
+    }
+}
+
 impl Default for Function {
     fn default() -> Self {
         Self::new(Rc::new(String::from("script")))
@@ -134,6 +150,12 @@ impl Display for Function {
         } else {
             write!(f, "<script>")
         }
+    }
+}
+
+impl Display for BoundMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.method.borrow().function)
     }
 }
 
@@ -158,7 +180,7 @@ impl PartialEq for Value {
     }
 }
 
-impl Display for Value {
+impl Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Value::*;
 
@@ -171,7 +193,14 @@ impl Display for Value {
             Closure(val) => write!(f, "{}", val.borrow().function),
             Class(val) => write!(f, "{}", val),
             Instance(val) => write!(f, "{}", val),
+            BoundMethod(val) => write!(f, "{}", val),
         }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <&Value as std::fmt::Debug>::fmt(&self, f)
     }
 }
 
@@ -243,6 +272,16 @@ impl From<Value> for Rc<Instance> {
         }
     }
 }
+
+impl From<Value> for Rc<Class> {
+    fn from(v: Value) -> Self {
+        match v {
+            Value::Class(c) => c,
+            _ => unimplemented!(),
+        }
+    }
+}
+
 impl From<Value> for String {
     fn from(value: Value) -> Self {
         match value {
