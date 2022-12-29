@@ -88,7 +88,7 @@ impl<'a> Compiler<'a> {
         for (i, local) in self.locals.iter().enumerate().rev() {
             if name == local.name {
                 if local.depth == -1 {
-                    errors.push("Can't read local variable in its own own initializer.");
+                    errors.push("Can't read local variable in its own initializer.");
                 }
 
                 return Some(i as u8);
@@ -120,7 +120,7 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        if self.function.upvalues.len() == 255 {
+        if self.function.upvalues.len() == 256 {
             errors.push("Too many closure variables in function.");
         }
 
@@ -267,7 +267,7 @@ impl<'a> Parser<'a> {
 
         let offset = self.chunk_mut().code.len() - loop_start + 2;
         if offset > u16::MAX as usize {
-            self.error("Loop body is too larger");
+            self.error("Loop body too large.");
         }
 
         self.emit_byte(((offset >> 8) & 0xff) as u8);
@@ -295,7 +295,7 @@ impl<'a> Parser<'a> {
         match u8::try_from(index) {
             Ok(index) => index,
             Err(_) => {
-                self.error("Too many constants in one chunk");
+                self.error("Too many constants in one chunk.");
                 0
             }
         }
@@ -468,7 +468,7 @@ impl<'a> Parser<'a> {
     }
 
     fn var_declaration(&mut self) {
-        let global = self.parse_variable("Expect a variable name.");
+        let global = self.parse_variable("Expect variable name.");
 
         if self.matches(TokenType::Equal) {
             self.expression();
@@ -880,7 +880,7 @@ impl<'a> Parser<'a> {
     }
 
     fn add_local(&mut self, name: &'a str) {
-        if self.compiler.locals.len() == u8::MAX as usize {
+        if self.compiler.locals.len() == u8::MAX as usize + 1 {
             self.error("Too many local variables in function.");
             return;
         }
@@ -942,7 +942,8 @@ impl<'a> Parser<'a> {
         match token.kind {
             TokenType::Eof => eprint!(" at end"),
             TokenType::Error => (),
-            _ => eprint!(" at {}", token.value),
+            TokenType::String => eprint!(" at '\"{}\"'", token.value),
+            _ => eprint!(" at '{}'", token.value),
         }
 
         eprintln!(": {}", message);

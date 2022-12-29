@@ -18,7 +18,7 @@ pub enum Value {
     BoundMethod(Rc<BoundMethod>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Function {
     pub arity: usize,
     pub chunk: Chunk,
@@ -34,18 +34,19 @@ pub struct Native {
     pub function: NativeFn,
 }
 
+#[derive(PartialEq)]
 pub struct Closure {
     pub function: Function,
     pub upvalues: Vec<Rc<RefCell<Upvalue>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct FnUpvalue {
     pub index: u8,
     pub is_local: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Upvalue {
     pub location: usize,
     pub closed: Option<Value>,
@@ -61,6 +62,7 @@ pub struct Instance {
     pub fields: RefCell<Table>,
 }
 
+#[derive(PartialEq)]
 pub struct BoundMethod {
     pub receiver: Value,
     pub method: Rc<RefCell<Closure>>,
@@ -77,7 +79,7 @@ impl Instance {
 
 impl Display for Instance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{} instance>", self.class)
+        write!(f, "{} instance", self.class)
     }
 }
 
@@ -139,7 +141,7 @@ impl Default for Function {
 
 impl Display for Native {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<native fn {}>", self.name)
+        write!(f, "<native fn>")
     }
 }
 
@@ -172,9 +174,9 @@ impl PartialEq for Value {
             (Self::Number(a), Self::Number(b)) => a == b,
             (Self::String(a), Self::String(b)) => a == b,
             (Self::Native(a), Self::Native(b)) => a.name == b.name,
-            (Self::Closure(a), Self::Closure(b)) => {
-                a.borrow().function.name == b.borrow().function.name
-            }
+            (Self::Closure(a), Self::Closure(b)) => Rc::eq(a, b),
+            (Self::Class(a), Self::Class(b)) => a.name == b.name,
+            (Self::BoundMethod(a), Self::BoundMethod(b)) => std::ptr::eq(&a.method, &b.method),
             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }

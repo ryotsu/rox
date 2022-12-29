@@ -53,7 +53,7 @@ impl<'a> Scanner<'a> {
                 '"' => self.scan_string(),
                 '0'..='9' => self.scan_number(),
                 ch if ch.is_ascii_alphabetic() || ch == '_' => self.scan_identifier(),
-                _ => self.error_token("Unexpected character"),
+                _ => self.error_token("Unexpected character."),
             }
         } else if self.is_finished {
             None
@@ -65,7 +65,7 @@ impl<'a> Scanner<'a> {
 
     fn advance(&mut self) -> Option<char> {
         self.source.next().map(|x| {
-            self.current += 1;
+            self.current += x.len_utf8();
             x
         })
     }
@@ -101,6 +101,7 @@ impl<'a> Scanner<'a> {
 
     fn scan_comment(&mut self) -> Option<Token<'a>> {
         if self.source.peek() == Some(&'/') {
+            self.advance();
             while self.source.peek().map_or(false, |&ch| ch != '\n') {
                 self.advance();
             }
@@ -151,7 +152,7 @@ impl<'a> Scanner<'a> {
         while self
             .source
             .peek()
-            .map_or(false, |&ch| ch.is_ascii_alphabetic() || ch == '_')
+            .map_or(false, |&ch| ch.is_ascii_alphanumeric() || ch == '_')
         {
             self.advance();
         }
@@ -188,7 +189,12 @@ impl<'a> Iterator for Scanner<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.scan_token()
+        let x = self.scan_token();
+        // if let Some(ref token) = x {
+        //     println!("{:?} => {:?}", token.kind, token.value);
+        // }
+
+        x
     }
 }
 

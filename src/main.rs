@@ -2,7 +2,7 @@ use std::io::Write;
 use std::process::exit;
 use std::{env, fs, io};
 
-use rox::vm::VM;
+use rox::vm::{InterpretResult, VM};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -36,5 +36,9 @@ fn repl() {
 fn run_file(path: &str) {
     let contents = fs::read_to_string(path).expect("Could not read the file.");
     let mut vm = VM::new();
-    vm.interpret(&contents);
+    match vm.interpret(&contents) {
+        InterpretResult::Ok => (),
+        InterpretResult::CompileError => exit(65),
+        InterpretResult::RuntimeError => exit(70),
+    }
 }

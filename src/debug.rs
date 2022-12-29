@@ -29,7 +29,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
         OpFalse => simple_instruction("OP_FALSE", offset),
         OpPop => simple_instruction("OP_POP", offset),
         OpGetLocal => byte_instruction("OP_GET_LOCAL", chunk, offset),
-        OpSetLocal => byte_instruction("Op_SET_LOCAL", chunk, offset),
+        OpSetLocal => byte_instruction("OP_SET_LOCAL", chunk, offset),
         OpGetGlobal => constant_instruction("OP_GET_GLOBAL", chunk, offset),
         OpDefineGlobal => constant_instruction("OP_DEFINE_GLOBAL", chunk, offset),
         OpSetGlobal => constant_instruction("OP_SET_GLOBAL", chunk, offset),
@@ -67,7 +67,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
                         "upvalue"
                     };
                     let index = chunk.code[offset + 1] as usize;
-                    println!("{:04}    | {:>20}  {} {}", offset, " ", is_local, index);
+                    println!("{:04}      | {:>20}{} {}", offset, " ", is_local, index);
                     offset += 2;
                 }
             }

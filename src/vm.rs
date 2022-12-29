@@ -57,7 +57,7 @@ macro_rules! binary_op {
                 (String::with_capacity(a.len() + b.len()) + &a + &b).into()
             }
             _ => {
-                $self.runtime_error("Both operands must be numbers/strings.");
+                $self.runtime_error("Operands must be two numbers or two strings.");
                 return InterpretResult::RuntimeError;
             }
         };
@@ -156,7 +156,7 @@ impl VM {
                 if let Some(Value::Closure(init)) = class.methods.borrow().get(self.init_string) {
                     return self.call(init.clone(), arg_count);
                 } else if arg_count != 0 {
-                    self.runtime_error(&format!("Expected 0 arguments but got {}", arg_count));
+                    self.runtime_error(&format!("Expected 0 arguments but got {}.", arg_count));
                     return false;
                 }
                 true
@@ -207,7 +207,7 @@ impl VM {
             return true;
         }
 
-        self.runtime_error(&format!("Undefined property '{}'", name));
+        self.runtime_error(&format!("Undefined property '{}'.", name));
         false
     }
 
@@ -221,19 +221,21 @@ impl VM {
         let upvalue = Upvalue::new(location);
         let upvalue = Rc::new(RefCell::new(upvalue));
 
-        self.open_upvalues.push_back(upvalue.clone());
+        self.open_upvalues.push_front(upvalue.clone());
         upvalue
     }
 
     fn close_upvalues(&mut self, last: usize) {
-        while self
-            .open_upvalues
-            .front()
-            .map_or(false, |uv| uv.borrow().location >= last)
-        {
-            let upvalue = self.open_upvalues.pop_front().unwrap();
-            let location = upvalue.borrow().location;
-            upvalue.borrow_mut().closed = Some(self.stack[location].clone());
+        let mut i = 0;
+        while i != self.open_upvalues.len() {
+            let upvalue = self.open_upvalues[i].clone();
+            if upvalue.borrow().location >= last {
+                self.open_upvalues.remove(i);
+                let location = upvalue.borrow().location;
+                upvalue.borrow_mut().closed = Some(self.stack[location].clone());
+            } else {
+                i += 1;
+            }
         }
     }
 
@@ -347,7 +349,7 @@ impl VM {
                     let value = match self.globals.get(&name) {
                         Some(value) => value.clone(),
                         None => {
-                            self.runtime_error(&format!("Undefined variable {}", name));
+                            self.runtime_error(&format!("Undefined variable '{}'.", name));
                             return InterpretResult::RuntimeError;
                         }
                     };
@@ -365,7 +367,7 @@ impl VM {
                     if let Entry::Occupied(mut e) = self.globals.entry(name.clone()) {
                         e.insert(value);
                     } else {
-                        self.runtime_error(&format!("Undefined variable {}", name));
+                        self.runtime_error(&format!("Undefined variable '{}'.", name));
                         return InterpretResult::RuntimeError;
                     }
                 }
@@ -424,7 +426,7 @@ impl VM {
                 OpSetProperty => {
                     if let Value::Instance(_) = self.peek(1) {
                     } else {
-                        self.runtime_error("Only instances have properties.");
+                        self.runtime_error("Only instances have fields.");
                         return InterpretResult::RuntimeError;
                     }
 
@@ -457,7 +459,7 @@ impl VM {
                 OpDivide => binary_op!(self, /),
                 OpNot => {
                     let value = self.pop().is_falsey();
-                    self.push((!value).into())
+                    self.push(value.into())
                 }
                 OpNegate => {
                     if let Value::Number(value) = self.pop() {
@@ -511,6 +513,7 @@ impl VM {
                 OpClosure => {
                     if let Value::Closure(closure) = self.read_constant() {
                         let length = closure.borrow().function.upvalues.len();
+                        let mut upvalues = vec![];
                         for _ in 0..length {
                             let is_local = self.read_byte() as u8;
                             let index = self.read_byte() as usize;
@@ -521,10 +524,15 @@ impl VM {
                             } else {
                                 self.current_closure().upvalues[index].clone()
                             };
-
-                            closure.borrow_mut().upvalues.push(upvalue);
+                            upvalues.push(upvalue);
                         }
-                        self.push(closure.clone().into());
+
+                        let closure = Rc::new(RefCell::new(Closure {
+                            function: closure.borrow().function.clone(),
+                            upvalues,
+                        }));
+
+                        self.push(closure.into());
                     }
                 }
                 OpCloseUpvalue => {
