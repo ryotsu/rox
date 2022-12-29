@@ -436,6 +436,14 @@ impl VM {
                     self.pop();
                     self.push(value);
                 }
+                OpGetSuper => {
+                    let name: String = self.read_constant().into();
+                    let superclass = self.pop().into();
+
+                    if !self.bind_method(superclass, name) {
+                        return InterpretResult::RuntimeError;
+                    }
+                }
                 OpEqual => {
                     let b = self.pop();
                     let a = self.pop();
@@ -489,6 +497,17 @@ impl VM {
                     }
                     *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
                 }
+                OpSuperInvoke => {
+                    let method = self.read_constant().into();
+                    let arg_count = self.read_byte() as usize;
+                    let superclass = self.pop().into();
+
+                    if !self.invoke_from_class(superclass, method, arg_count) {
+                        return InterpretResult::RuntimeError;
+                    }
+
+                    *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
+                }
                 OpClosure => {
                     if let Value::Closure(closure) = self.read_constant() {
                         let length = closure.borrow().function.upvalues.len();
@@ -530,6 +549,20 @@ impl VM {
                     let name = self.read_constant().into();
                     let class = Class::new(name);
                     self.push(class.into());
+                }
+                OpInherit => {
+                    if let Value::Class(superclass) = self.peek(1) {
+                        if let Value::Class(subclass) = self.peek(0) {
+                            subclass
+                                .methods
+                                .borrow_mut()
+                                .extend(superclass.methods.clone().into_inner());
+                            self.pop();
+                        }
+                    } else {
+                        self.runtime_error("Superclass must be a class.");
+                        return InterpretResult::RuntimeError;
+                    }
                 }
                 OpMethod => {
                     let name: String = self.read_constant().into();

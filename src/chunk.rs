@@ -22,6 +22,7 @@ pub enum OpCode {
     OpSetUpvalue,
     OpGetProperty,
     OpSetProperty,
+    OpGetSuper,
     OpEqual,
     OpGreater,
     OpLess,
@@ -36,12 +37,13 @@ pub enum OpCode {
     OpJumpIfFalse,
     OpLoop,
     OpCall,
-
     OpInvoke,
+    OpSuperInvoke,
     OpClosure,
     OpCloseUpvalue,
     OpReturn,
     OpClass,
+    OpInherit,
     OpMethod,
 }
 

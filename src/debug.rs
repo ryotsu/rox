@@ -37,6 +37,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
         OpSetUpvalue => byte_instruction("OP_SET_UPVALUE", chunk, offset),
         OpGetProperty => constant_instruction("OP_GET_PROPERTY", chunk, offset),
         OpSetProperty => constant_instruction("OP_SET_PROPERTY", chunk, offset),
+        OpGetSuper => constant_instruction("OP_GET_SUPER", chunk, offset),
         OpEqual => simple_instruction("OP_EQUAL", offset),
         OpGreater => simple_instruction("OP_GREATER", offset),
         OpLess => simple_instruction("OP_LESS", offset),
@@ -52,6 +53,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
         OpLoop => jump_instruction("OP_LOOP", -1, chunk, offset),
         OpCall => byte_instruction("OP_CALL", chunk, offset),
         OpInvoke => invoke_instruction("OP_INVOKE", chunk, offset),
+        OpSuperInvoke => invoke_instruction("OP_SUPER_INVOKE", chunk, offset),
         OpClosure => {
             offset += 2;
             let constant = chunk.code[offset - 1];
@@ -74,6 +76,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize) -> usize {
         OpCloseUpvalue => simple_instruction("OP_CLOSE_UPVALUE", offset),
         OpReturn => simple_instruction("OP_RETURN", offset),
         OpClass => constant_instruction("OP_CLASS", chunk, offset),
+        OpInherit => simple_instruction("OP_INHERIT", offset),
         OpMethod => constant_instruction("OP_METHOD", chunk, offset),
     }
 }

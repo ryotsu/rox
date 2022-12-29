@@ -27,6 +27,7 @@ struct Compiler<'a> {
 #[derive(Clone)]
 struct ClassCompiler {
     enclosing: Box<Option<ClassCompiler>>,
+    has_superclass: bool,
 }
 
 struct Local<'a> {
@@ -49,6 +50,7 @@ impl ClassCompiler {
     fn new() -> Self {
         Self {
             enclosing: Box::new(None),
+            has_superclass: false,
         }
     }
 }
@@ -560,6 +562,25 @@ impl<'a> Parser<'a> {
         class_compiler.enclosing = Box::new(self.current_class.take());
         self.current_class = Some(class_compiler);
 
+        if self.matches(TokenType::Less) {
+            self.consume(TokenType::Identifier, "Expect superclass name.");
+            self.variable(false);
+
+            if class_name == self.previous.value {
+                self.error("A class can't inherit from itself.");
+            }
+
+            self.begin_scope();
+            self.add_local("super");
+            self.define_variable(0);
+
+            self.named_variable(class_name, false);
+            self.emit_byte(OpCode::OpInherit);
+            if let Some(class_compiler) = self.current_class.as_mut() {
+                class_compiler.has_superclass = true;
+            }
+        }
+
         self.named_variable(class_name, false);
 
         self.consume(TokenType::LeftBrace, "Expect '{' before class body.");
@@ -568,6 +589,12 @@ impl<'a> Parser<'a> {
         }
         self.consume(TokenType::RightBrace, "Expect '}' after class body.");
         self.emit_byte(OpCode::OpPop);
+
+        if let Some(class_compiler) = &self.current_class {
+            if class_compiler.has_superclass {
+                self.end_scope();
+            }
+        }
 
         if let Some(class) = self.current_class.take() {
             self.current_class = *class.enclosing
@@ -636,6 +663,32 @@ impl<'a> Parser<'a> {
     fn variable(&mut self, can_assign: bool) {
         let previous = self.previous.value;
         self.named_variable(previous, can_assign)
+    }
+
+    fn super_(&mut self, _can_assign: bool) {
+        if self.current_class.is_none() {
+            self.error("Can't use 'super' outside of a class.");
+        } else if self
+            .current_class
+            .as_ref()
+            .map_or(false, |cc| !cc.has_superclass)
+        {
+            self.error("Can't use 'super' in a class with no superclass.");
+        }
+
+        self.consume(TokenType::Dot, "Expect '.' after 'super'.");
+        self.consume(TokenType::Identifier, "Expect superclass method name.");
+        let name = self.identifier_constant(self.previous.value);
+        self.named_variable("this", false);
+        if self.matches(TokenType::LeftParen) {
+            let arg_count = self.argument_list();
+            self.named_variable("super", false);
+            self.emit_bytes(OpCode::OpSuperInvoke, name);
+            self.emit_byte(arg_count);
+        } else {
+            self.named_variable("super", false);
+            self.emit_bytes(OpCode::OpGetSuper, name);
+        }
     }
 
     fn this(&mut self, _can_assign: bool) {
@@ -910,7 +963,6 @@ enum Precedence {
     Factor,
     Unary,
     Call,
-    Primary,
 }
 
 impl std::ops::Add<u8> for Precedence {
@@ -983,7 +1035,7 @@ impl<'a> ParseRule<'a> {
             TokenType::Or => Self::new(None, Some(Parser::or), Precedence::Or),
             TokenType::Print => Self::new(None, None, Precedence::None),
             TokenType::Return => Self::new(None, None, Precedence::None),
-            TokenType::Super => Self::new(None, None, Precedence::None),
+            TokenType::Super => Self::new(Some(Parser::super_), None, Precedence::None),
             TokenType::This => Self::new(Some(Parser::this), None, Precedence::None),
             TokenType::True => Self::new(Some(Parser::literal), None, Precedence::None),
             TokenType::Var => Self::new(None, None, Precedence::None),
