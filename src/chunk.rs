@@ -60,6 +60,8 @@ pub struct Chunk {
     pub lines: Vec<u32>,
 }
 
+use crate::Handler;
+
 impl Chunk {
     pub fn new() -> Self {
         Self {
@@ -87,8 +89,8 @@ impl Chunk {
     }
 
     #[cfg(feature = "debug_print_code")]
-    pub fn disassemble(&self, name: &str) {
-        disassemble_chunk(self, name)
+    pub fn disassemble(&self, name: &str, handler: &Handler) {
+        disassemble_chunk(self, name, handler)
     }
 }
 

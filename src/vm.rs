@@ -11,8 +11,8 @@ use std::rc::Rc;
 
 use crate::Handler;
 
-#[cfg(feature = "debug_trace_execution")]
-use crate::debug;
+//#[cfg(feature = "debug_trace_execution")]
+//use crate::debug;
 
 const FRAME_MAX: usize = 64;
 const STACK_MAX: usize = FRAME_MAX * 256;
@@ -329,8 +329,12 @@ impl<'a> VM<'a> {
                 }
                 println!();
 
-                let ip = self.current_frame().ip;
-                debug::disassemble_instruction(&self.current_closure().function.chunk, ip);
+                let _ip = self.current_frame().ip;
+                // debug::disassemble_instruction(
+                //     &self.current_closure().function.chunk,
+                //     ip,
+                //     self.handler,
+                // );
             }
 
             let instruction = self.read_byte();

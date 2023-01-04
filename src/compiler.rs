@@ -202,8 +202,8 @@ impl<'a> Parser<'a> {
                 "<script>"
             };
 
-            function.chunk.disassemble(name);
-            println!();
+            function.chunk.disassemble(name, self.handler);
+            self.handler.set_opcode("");
         }
 
         function

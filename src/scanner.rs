@@ -121,6 +121,7 @@ impl<'a> Scanner<'a> {
             self.advance();
         }
 
+        self.source.reset_peek();
         if self.source.peek().is_none() {
             return self.error_token("Unterminated string.");
         }
@@ -189,12 +190,7 @@ impl<'a> Iterator for Scanner<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let x = self.scan_token();
-        // if let Some(ref token) = x {
-        //     println!("{:?} => {:?}", token.kind, token.value);
-        // }
-
-        x
+        self.scan_token()
     }
 }
 
@@ -247,7 +243,7 @@ pub enum TokenType {
     Eof,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Token<'a> {
     pub kind: TokenType,
     pub value: &'a str,
