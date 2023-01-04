@@ -9,13 +9,16 @@ use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
+use crate::Handler;
+
 #[cfg(feature = "debug_trace_execution")]
 use crate::debug;
 
 const FRAME_MAX: usize = 64;
 const STACK_MAX: usize = FRAME_MAX * 256;
 
-pub struct VM {
+pub struct VM<'a> {
+    handler: &'a Handler,
     frames: Vec<CallFrame>,
     stack: Vec<Value>,
     globals: Table,
@@ -80,14 +83,15 @@ macro_rules! binary_op {
     }};
 }
 
-impl VM {
-    pub fn new() -> Self {
+impl<'a> VM<'a> {
+    pub fn new(handler: &'a Handler) -> Self {
         let mut vm = Self {
             frames: Vec::with_capacity(FRAME_MAX),
             stack: Vec::with_capacity(STACK_MAX),
             globals: Table::new(),
             open_upvalues: VecDeque::new(),
             init_string: "init",
+            handler,
         };
 
         vm.define_native("clock", 0, clock_native);
@@ -254,17 +258,24 @@ impl VM {
     }
 
     fn runtime_error(&mut self, message: &str) {
-        eprintln!("{}", message);
+        //eprintln!("{}", message);
+        self.handler.set_error(message);
+        let mut error = String::new();
 
         for frame in self.frames.iter().rev() {
             let function = &frame.closure.borrow().function;
             let index = frame.ip - 1;
-            eprint!("[line {}] in ", function.chunk.lines[index]);
+            error += &format!("[line {}] in ", function.chunk.lines[index]);
             if function.name.as_str() == "" {
-                eprintln!("script");
+                //eprintln!("script");
+                error += "script"
             } else {
-                eprintln!("{}", function.name);
+                //eprintln!("{}", function.name);
+                error += &function.name;
             }
+
+            self.handler.set_error(&error);
+            error.clear();
         }
 
         self.reset_stack();
@@ -292,8 +303,8 @@ impl VM {
         self.current_frame().closure.borrow()
     }
 
-    pub fn interpret(&mut self, source: &str) -> InterpretResult {
-        let function = compile(source);
+    pub fn interpret(&mut self) -> InterpretResult {
+        let function = compile(self.handler);
         if function.is_none() {
             return InterpretResult::CompileError;
         }
@@ -469,7 +480,7 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpPrint => println!("{}", self.pop()),
+                OpPrint => self.handler.set_output(&format!("{}", self.pop())),
                 OpJump => {
                     let offset = self.read_short();
                     self.current_frame_mut().ip += offset;
@@ -578,11 +589,5 @@ impl VM {
                 }
             }
         }
-    }
-}
-
-impl Default for VM {
-    fn default() -> Self {
-        Self::new()
     }
 }

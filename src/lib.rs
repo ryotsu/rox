@@ -11,12 +11,37 @@ mod debug;
 
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
+#[wasm_bindgen(module = "site/src/handle_rox.js")]
 extern "C" {
-    pub fn alert(s: &str);
+    pub type Handler;
+
+    #[wasm_bindgen(method, getter)]
+    fn source(this: &Handler) -> String;
+
+    #[wasm_bindgen(method, setter)]
+    fn set_output(this: &Handler, output: &str);
+
+    #[wasm_bindgen(method, setter)]
+    fn set_error(this: &Handler, error: &str);
+
+    #[wasm_bindgen(method, setter)]
+    fn set_opcode(this: &Handler, opcode: &str);
+
+    #[wasm_bindgen(method, setter)]
+    fn set_has_error(this: &Handler, error: bool);
 }
 
 #[wasm_bindgen]
-pub fn greet(name: &str) {
-    alert(&format!("Hello {}!", name));
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+
+    #[wasm_bindgen(js_namespace = console)]
+    fn error(s: &str);
+}
+
+#[wasm_bindgen]
+pub fn run(handler: &Handler) {
+    let mut vm = vm::VM::new(handler);
+    vm.interpret();
 }

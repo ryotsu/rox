@@ -5,7 +5,10 @@ use crate::value::{FnUpvalue, Function, Value};
 use std::mem;
 use std::rc::Rc;
 
+use crate::Handler;
+
 pub struct Parser<'a> {
+    handler: &'a Handler,
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
@@ -144,7 +147,7 @@ impl<'a> Compiler<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(handler: &'a Handler, source: &'a str) -> Self {
         Self {
             scanner: Scanner::from(source),
             previous: Token::default(),
@@ -154,6 +157,7 @@ impl<'a> Parser<'a> {
             had_error: false,
             panic_mode: false,
             errors: Vec::new(),
+            handler,
         }
     }
 
@@ -931,23 +935,36 @@ impl<'a> Parser<'a> {
     }
 
     fn error_at(&mut self, token: &Token<'a>, message: &str) {
+        let mut error = String::new();
         if self.panic_mode {
             return;
         }
 
         self.panic_mode = true;
 
-        eprint!("[line {}] Error", token.line);
+        //eprint!("[line {}] Error", token.line);
+        error += &format!("[line {}] Error", token.line);
+
+        // match token.kind {
+        //     TokenType::Eof => eprint!(" at end"),
+        //     TokenType::Error => (),
+        //     TokenType::String => eprint!(" at '\"{}\"'", token.value),
+        //     _ => eprint!(" at '{}'", token.value),
+        // }
 
         match token.kind {
-            TokenType::Eof => eprint!(" at end"),
+            TokenType::Eof => error += " at end",
             TokenType::Error => (),
-            TokenType::String => eprint!(" at '\"{}\"'", token.value),
-            _ => eprint!(" at '{}'", token.value),
+            TokenType::String => error += &format!(" at '\"{}\"'", token.value),
+            _ => error += &format!(" at '{}'", token.value),
         }
 
-        eprintln!(": {}", message);
+        //eprintln!(": {}", message);
+        error += &format!(": {}", message);
+        self.handler.set_error(&error);
+
         self.had_error = true;
+        self.handler.set_has_error(true);
     }
 }
 
@@ -1047,7 +1064,8 @@ impl<'a> ParseRule<'a> {
     }
 }
 
-pub fn compile(source: &str) -> Option<Function> {
-    let mut parser = Parser::new(source);
+pub fn compile(handler: &Handler) -> Option<Function> {
+    let source = handler.source();
+    let mut parser = Parser::new(handler, &source);
     parser.compile()
 }

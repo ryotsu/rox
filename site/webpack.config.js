@@ -1,9 +1,30 @@
-const path = require("path");
+const path = require('path');
+const MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
+
 module.exports = {
-  entry: "./index.ts",
+  entry: './src/index.js',
   output: {
-    path: path.resolve(__dirname, "dist"),
-    filename: "index.js",
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'app.js',
   },
-  mode: "development",
+  module: {
+    rules: [
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader']
+      },
+      {
+        test: /\.ttf$/,
+        use: ['file-loader'],
+      },
+    ]
+  },
+  plugins: [new MonacoWebpackPlugin],
+  experiments: {
+    asyncWebAssembly: true,
+  },
+  mode: 'development',
+  devServer: {
+    static: './dist',
+  }
 }

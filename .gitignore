@@ -2,3 +2,5 @@
 /scripts
 /pkg
 /site/node_modules
+/site/dist/
+/build.sh
