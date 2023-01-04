@@ -7,6 +7,7 @@ import './style.css';
 let editor = monaco.editor.create(document.getElementById('source'), {
   value: ['print "Hello, World!";'].join('\n'),
   theme: 'vs-dark',
+  glyphMargin: true,
 });
 
 let output = monaco.editor.create(document.getElementById('output'), {
@@ -26,12 +27,8 @@ document.getElementById('print').addEventListener('click', (_evt) => {
   let handler = new Handler(source);
   rox.run(handler);
 
-  let result = handler.output;
-  opcode.setValue(handler.opcode);
-  if (handler.has_error) {
-    result += '\n' + handler.error;
-    result = result.trim();
-  }
+  let result = handler.output + '\n' + handler.error;
+  output.setValue(result.trim());
 
-  output.setValue(result);
+  opcode.setValue(handler.opcode);
 });

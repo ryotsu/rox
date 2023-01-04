@@ -266,6 +266,7 @@ impl<'a> VM<'a> {
             let function = &frame.closure.borrow().function;
             let index = frame.ip - 1;
             error += &format!("[line {}] in ", function.chunk.lines[index]);
+            self.handler.set_error_lines(function.chunk.lines[index]);
             if function.name.as_str() == "" {
                 //eprintln!("script");
                 error += "script"

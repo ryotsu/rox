@@ -944,6 +944,7 @@ impl<'a> Parser<'a> {
 
         //eprint!("[line {}] Error", token.line);
         error += &format!("[line {}] Error", token.line);
+        self.handler.set_error_lines(token.line);
 
         // match token.kind {
         //     TokenType::Eof => eprint!(" at end"),
@@ -964,7 +965,6 @@ impl<'a> Parser<'a> {
         self.handler.set_error(&error);
 
         self.had_error = true;
-        self.handler.set_has_error(true);
     }
 }
 

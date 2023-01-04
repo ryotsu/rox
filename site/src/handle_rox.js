@@ -4,7 +4,7 @@ export class Handler {
     this._output = [];
     this._error = [];
     this._opcode = [];
-    this._has_error = false;
+    this._error_lines = [];
   }
 
   get source() {
@@ -23,8 +23,8 @@ export class Handler {
     return this._error.join('\n');
   }
 
-  set error(e) {
-    this._error.push(e);
+  set error(error) {
+    this._error.push(error);
   }
 
   get opcode() {
@@ -35,11 +35,11 @@ export class Handler {
     this._opcode.push(op);
   }
 
-  set has_error(error) {
-    this._has_error = error;
+  get error_lines() {
+    return this._error_lines;
   }
 
-  get has_error() {
-    return this._has_error;
+  set error_lines(line) {
+    this._error_lines.push(line);
   }
 }

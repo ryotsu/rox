@@ -9,7 +9,6 @@ pub mod vm;
 #[cfg(any(feature = "debug_print_code", feature = "debug_trace_execution"))]
 mod debug;
 
-use vm::InterpretResult;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(module = "site/src/handle_rox.js")]
@@ -29,7 +28,7 @@ extern "C" {
     fn set_opcode(this: &Handler, opcode: &str);
 
     #[wasm_bindgen(method, setter)]
-    fn set_has_error(this: &Handler, error: bool);
+    fn set_error_lines(this: &Handler, line: u32);
 }
 
 #[wasm_bindgen]
@@ -44,8 +43,5 @@ extern "C" {
 #[wasm_bindgen]
 pub fn run(handler: &Handler) {
     let mut vm = vm::VM::new(handler);
-    match vm.interpret() {
-        InterpretResult::Ok => (),
-        _ => handler.set_has_error(true),
-    }
+    vm.interpret();
 }
