@@ -1,2 +1,4 @@
 /target
 /scripts
+/pkg
+/site/node_modules

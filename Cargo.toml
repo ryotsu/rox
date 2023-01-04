@@ -11,6 +11,10 @@ repository = "https://github.com/ryotsu/rox"
 
 [dependencies]
 itertools = "0.10.2"
+wasm-bindgen = "0.2"
+
+[lib]
+crate-type = ["cdylib"]
 
 [features]
 default = ["debug_trace_execution", "debug_print_code"]
