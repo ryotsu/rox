@@ -1,6 +1,7 @@
 /target
 /scripts
 /pkg
-/site/node_modules
+/site/node_modules/
+/site/.next/
 /site/dist/
 /build.sh

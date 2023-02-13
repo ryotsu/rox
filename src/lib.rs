@@ -45,3 +45,8 @@ pub fn run(handler: &Handler) {
     let mut vm = vm::VM::new(handler);
     vm.interpret();
 }
+
+#[wasm_bindgen]
+pub fn greet(name: &str) -> String {
+    format!("Hello {name}!")
+}
