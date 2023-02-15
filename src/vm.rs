@@ -18,7 +18,7 @@ const FRAME_MAX: usize = 64;
 const STACK_MAX: usize = FRAME_MAX * 256;
 
 pub struct VM<'a> {
-    handler: &'a Handler,
+    handler: Rc<RefCell<Handler<'a>>>,
     frames: Vec<CallFrame>,
     stack: Vec<Value>,
     globals: Table,
@@ -84,14 +84,14 @@ macro_rules! binary_op {
 }
 
 impl<'a> VM<'a> {
-    pub fn new(handler: &'a Handler) -> Self {
+    pub fn new(handler: Handler<'a>) -> Self {
         let mut vm = Self {
             frames: Vec::with_capacity(FRAME_MAX),
             stack: Vec::with_capacity(STACK_MAX),
             globals: Table::new(),
             open_upvalues: VecDeque::new(),
             init_string: "init",
-            handler,
+            handler: Rc::new(RefCell::new(handler)),
         };
 
         vm.define_native("clock", 0, clock_native);
@@ -259,14 +259,16 @@ impl<'a> VM<'a> {
 
     fn runtime_error(&mut self, message: &str) {
         //eprintln!("{}", message);
-        self.handler.set_error(message);
+        self.handler.borrow_mut().set_error(message);
         let mut error = String::new();
 
         for frame in self.frames.iter().rev() {
             let function = &frame.closure.borrow().function;
             let index = frame.ip - 1;
             error += &format!("[line {}] in ", function.chunk.lines[index]);
-            self.handler.set_error_lines(function.chunk.lines[index]);
+            self.handler
+                .borrow_mut()
+                .set_error_lines(function.chunk.lines[index]);
             if function.name.as_str() == "" {
                 //eprintln!("script");
                 error += "script"
@@ -275,7 +277,7 @@ impl<'a> VM<'a> {
                 error += &function.name;
             }
 
-            self.handler.set_error(&error);
+            self.handler.borrow_mut().set_error(&error);
             error.clear();
         }
 
@@ -305,13 +307,15 @@ impl<'a> VM<'a> {
     }
 
     pub fn interpret(&mut self) -> InterpretResult {
-        let function = compile(self.handler);
-        if function.is_none() {
-            return InterpretResult::CompileError;
-        }
-        let function = function.unwrap();
+        let closure = {
+            let function = compile(self.handler.clone());
+            if function.is_none() {
+                return InterpretResult::CompileError;
+            }
+            let function = function.unwrap();
+            Rc::new(Closure::new(function))
+        };
 
-        let closure = Rc::new(Closure::new(function));
         self.push(closure.clone().into());
         self.frames.push(CallFrame::new(closure, 0));
 
@@ -485,7 +489,10 @@ impl<'a> VM<'a> {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpPrint => self.handler.set_output(&format!("{}", self.pop())),
+                OpPrint => {
+                    let value = self.pop();
+                    self.handler.borrow_mut().set_output(&format!("{value}"));
+                }
                 OpJump => {
                     let offset = self.read_short();
                     self.current_frame_mut().ip += offset;

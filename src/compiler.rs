@@ -2,13 +2,14 @@ use crate::chunk::{Chunk, OpCode};
 use crate::scanner::{Scanner, Token, TokenType};
 use crate::value::{FnUpvalue, Function, Value};
 
+use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
 
 use crate::Handler;
 
 pub struct Parser<'a> {
-    handler: &'a Handler,
+    handler: Rc<RefCell<Handler<'a>>>,
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
@@ -147,7 +148,9 @@ impl<'a> Compiler<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(handler: &'a Handler, source: &'a str) -> Self {
+    fn new(handler: Rc<RefCell<Handler<'a>>>) -> Self {
+        let source = handler.borrow().source;
+
         Self {
             scanner: Scanner::from(source),
             previous: Token::default(),
@@ -202,8 +205,8 @@ impl<'a> Parser<'a> {
                 "<script>"
             };
 
-            function.chunk.disassemble(name, self.handler);
-            self.handler.set_opcode("");
+            function.chunk.disassemble(name, self.handler.clone());
+            self.handler.borrow_mut().set_opcode("");
         }
 
         function
@@ -944,7 +947,7 @@ impl<'a> Parser<'a> {
 
         //eprint!("[line {}] Error", token.line);
         error += &format!("[line {}] Error", token.line);
-        self.handler.set_error_lines(token.line);
+        self.handler.borrow_mut().set_error_lines(token.line);
 
         // match token.kind {
         //     TokenType::Eof => eprint!(" at end"),
@@ -962,7 +965,7 @@ impl<'a> Parser<'a> {
 
         //eprintln!(": {}", message);
         error += &format!(": {}", message);
-        self.handler.set_error(&error);
+        self.handler.borrow_mut().set_error(&error);
 
         self.had_error = true;
     }
@@ -1064,8 +1067,7 @@ impl<'a> ParseRule<'a> {
     }
 }
 
-pub fn compile(handler: &Handler) -> Option<Function> {
-    let source = handler.source();
-    let mut parser = Parser::new(handler, &source);
+pub fn compile(handler: Rc<RefCell<Handler>>) -> Option<Function> {
+    let mut parser = Parser::new(handler);
     parser.compile()
 }

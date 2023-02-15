@@ -3,6 +3,9 @@ use crate::value::Value;
 #[cfg(feature = "debug_print_code")]
 use crate::debug::disassemble_chunk;
 
+#[cfg(feature = "debug_print_code")]
+use std::{cell::RefCell, rc::Rc};
+
 use std::mem;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -89,7 +92,7 @@ impl Chunk {
     }
 
     #[cfg(feature = "debug_print_code")]
-    pub fn disassemble(&self, name: &str, handler: &Handler) {
+    pub fn disassemble(&self, name: &str, handler: Rc<RefCell<Handler>>) {
         disassemble_chunk(self, name, handler)
     }
 }

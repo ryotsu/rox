@@ -2,16 +2,23 @@ use crate::chunk::{Chunk, OpCode};
 use crate::value::Value;
 use crate::Handler;
 
-pub fn disassemble_chunk(chunk: &Chunk, name: &str, handler: &Handler) {
-    handler.set_opcode(&format!("== {} ==", name));
+use std::cell::RefCell;
+use std::rc::Rc;
+
+pub fn disassemble_chunk(chunk: &Chunk, name: &str, handler: Rc<RefCell<Handler>>) {
+    handler.borrow_mut().set_opcode(&format!("== {} ==", name));
 
     let mut offset = 0;
     while offset < chunk.code.len() {
-        offset = disassemble_instruction(chunk, offset, handler);
+        offset = disassemble_instruction(chunk, offset, handler.clone());
     }
 }
 
-pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize, handler: &Handler) -> usize {
+pub fn disassemble_instruction(
+    chunk: &Chunk,
+    mut offset: usize,
+    handler: Rc<RefCell<Handler>>,
+) -> usize {
     use OpCode::*;
 
     let mut asm = String::new();
@@ -63,7 +70,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize, handler: &Handl
 
             asm += &format!("{:<16} {:4} ", "OP_CLOSURE", constant as u8);
             asm += &format!("{}", chunk.constants[constant as usize]);
-            handler.set_opcode(&asm);
+            handler.borrow_mut().set_opcode(&asm);
 
             if let Value::Closure(closure) = &chunk.constants[constant as usize] {
                 for _ in 0..closure.borrow().function.upvalues.len() {
@@ -73,7 +80,7 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize, handler: &Handl
                         "upvalue"
                     };
                     let index = chunk.code[offset + 1] as usize;
-                    handler.set_opcode(&format!(
+                    handler.borrow_mut().set_opcode(&format!(
                         "{:04}      | {:>20}{} {}",
                         offset, " ", is_local, index
                     ));
@@ -90,9 +97,14 @@ pub fn disassemble_instruction(chunk: &Chunk, mut offset: usize, handler: &Handl
     }
 }
 
-fn simple_instruction(name: &str, offset: usize, handler: &Handler, mut asm: String) -> usize {
+fn simple_instruction(
+    name: &str,
+    offset: usize,
+    handler: Rc<RefCell<Handler>>,
+    mut asm: String,
+) -> usize {
     asm += name;
-    handler.set_opcode(&asm);
+    handler.borrow_mut().set_opcode(&asm);
     offset + 1
 }
 
@@ -100,13 +112,13 @@ fn constant_instruction(
     name: &str,
     chunk: &Chunk,
     offset: usize,
-    handler: &Handler,
+    handler: Rc<RefCell<Handler>>,
     mut asm: String,
 ) -> usize {
     let constant = chunk.code[offset + 1];
     asm += &format!("{:<16} {:4} ", name, constant as u8);
     asm += &format!("'{}'", chunk.constants[constant as usize]);
-    handler.set_opcode(&asm);
+    handler.borrow_mut().set_opcode(&asm);
     offset + 2
 }
 
@@ -114,7 +126,7 @@ fn invoke_instruction(
     name: &str,
     chunk: &Chunk,
     offset: usize,
-    handler: &Handler,
+    handler: Rc<RefCell<Handler>>,
     mut asm: String,
 ) -> usize {
     let constant = chunk.code[offset + 1];
@@ -124,7 +136,7 @@ fn invoke_instruction(
         "{:<16} ({} args) {:4} '{}'",
         name, arg_count as u8, constant as u8, chunk.constants[constant as usize]
     );
-    handler.set_opcode(&asm);
+    handler.borrow_mut().set_opcode(&asm);
     offset + 3
 }
 
@@ -132,12 +144,12 @@ fn byte_instruction(
     name: &str,
     chunk: &Chunk,
     offset: usize,
-    handler: &Handler,
+    handler: Rc<RefCell<Handler>>,
     mut asm: String,
 ) -> usize {
     let slot = chunk.code[offset + 1];
     asm += &format!("{:<16} {:4}", name, slot as u8);
-    handler.set_opcode(&asm);
+    handler.borrow_mut().set_opcode(&asm);
     offset + 2
 }
 
@@ -146,7 +158,7 @@ fn jump_instruction(
     sign: isize,
     chunk: &Chunk,
     offset: usize,
-    handler: &Handler,
+    handler: Rc<RefCell<Handler>>,
     mut asm: String,
 ) -> usize {
     let jump = (chunk.code[offset + 1] as isize) << 8 | chunk.code[offset + 2] as isize;
@@ -158,6 +170,6 @@ fn jump_instruction(
         offset as isize + 3 + sign * jump
     );
 
-    handler.set_opcode(&asm);
+    handler.borrow_mut().set_opcode(&asm);
     offset + 3
 }
