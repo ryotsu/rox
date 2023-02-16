@@ -1,4 +1,5 @@
 import React from 'react';
+import Head from 'next/head';
 import Editor from '@monaco-editor/react';
 
 import * as rox from '../node_modules/rox/rox';
@@ -61,27 +62,40 @@ class Index extends React.Component {
 
   render() {
     return (
-      <div className='container' >
-        <button onClick={this.run}>Run</button>
-        <Editor
-          className='source'
-          theme='vs-dark'
-          onMount={(editor, _) => this.sourceRef.current = editor}
-          options={{ glyphMargin: true }}
-          value={this.state.source}
-        />
-        <Editor
-          className='output'
-          theme='vs-dark'
-          options={{ lineNumbers: 'off', readOnly: true }}
-          value={this.state.output}
-        />
-        <Editor
-          className='opcode'
-          theme='vs-dark'
-          options={{ lineNumbers: 'off', readOnly: true }}
-          value={this.state.opcode}
-        />
+      <div className='main'>
+        <Head>
+          <title>Rox Playground</title>
+          <link rel="icon" href="favicon.svg" sizes="any" type="image/svg+xml" />
+        </Head>
+        <div className='navbar'>
+          <a className='home'>Rox Playground</a>
+          <a className='nav-member' onClick={this.run}>Run &nbsp; ▶</a>
+          <a className='nav-member'>Share</a>
+        </div>
+        <div className='container' >
+          <div className='source'>
+            <Editor
+              theme='vs-dark'
+              onMount={(editor, _) => this.sourceRef.current = editor}
+              options={{ glyphMargin: true }}
+              value={this.state.source}
+            />
+          </div>
+          <div className='opcode'>
+            <Editor
+              theme='vs-dark'
+              options={{ lineNumbers: 'off', readOnly: true }}
+              value={this.state.opcode}
+            />
+          </div>
+          <div className='output'>
+            <Editor
+              theme='vs-dark'
+              options={{ lineNumbers: 'off', readOnly: true, minimap: { enabled: false } }}
+              value={this.state.output}
+            />
+          </div>
+        </div>
       </div>
     );
   }
