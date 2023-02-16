@@ -253,9 +253,9 @@ pub struct Token<'a> {
 impl<'a> Default for Token<'a> {
     fn default() -> Self {
         Token {
-            kind: TokenType::Error,
+            kind: TokenType::Eof,
             value: "",
-            line: 0,
+            line: 1,
         }
     }
 }

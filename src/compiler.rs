@@ -220,7 +220,6 @@ impl<'a> Parser<'a> {
             if self.current.kind != TokenType::Error {
                 break;
             }
-
             self.error_at_current(self.current.value);
         }
     }

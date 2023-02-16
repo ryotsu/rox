@@ -1,6 +1,8 @@
 import React from 'react';
 import Head from 'next/head';
 import Editor from '@monaco-editor/react';
+import { ToastContainer, toast } from 'react-toastify';
+import LZString from 'lz-string';
 
 import * as rox from '../node_modules/rox/rox';
 
@@ -9,7 +11,7 @@ class Index extends React.Component {
     super(props);
     this.sourceRef = React.createRef();
     this.state = {
-      source: 'print "Hello, World!";',
+      source: 'print "Hello World!";',
       output: '',
       opcode: '',
       errors: [],
@@ -18,9 +20,21 @@ class Index extends React.Component {
 
     if (typeof window !== 'undefined') {
       window.setState = this.setState.bind(this);
-    }
+      let source = this.getSourceFromURL();
+      if (source) {
+        this.state.source = source;
+      }
 
+      window.addEventListener('hashchange', (_e) => {
+        let source = this.getSourceFromURL();
+        if (source) {
+          this.setState({ source: source, output: '', opcode: '', errors: [] })
+        }
+      });
+    }
   }
+
+
 
   run = () => {
     let source = this.sourceRef.current.getValue();
@@ -60,6 +74,18 @@ class Index extends React.Component {
     this.setState({ decorations: new_decorations })
   }
 
+  copySource = () => {
+    let source = this.sourceRef.current.getValue();
+    let compressed = LZString.compressToEncodedURIComponent(source);
+    navigator.clipboard.writeText(window.location.host + '/#' + compressed);
+    toast("Copied!");
+  }
+
+  getSourceFromURL = () => {
+    let compressed = window.location.hash.substring(1);
+    return LZString.decompressFromEncodedURIComponent(compressed);
+  }
+
   render() {
     return (
       <div className='main'>
@@ -70,15 +96,16 @@ class Index extends React.Component {
         <div className='navbar'>
           <a className='home'>Rox Playground</a>
           <a className='nav-member' onClick={this.run}>Run &nbsp; ▶</a>
-          <a className='nav-member'>Share</a>
+          <a className='nav-member' onClick={this.copySource}>Share</a>
         </div>
+        <ToastContainer />
         <div className='container' >
           <div className='source'>
             <Editor
               theme='vs-dark'
               onMount={(editor, _) => this.sourceRef.current = editor}
               options={{ glyphMargin: true }}
-              value={this.state.source}
+              value={this.props.source || this.state.source}
             />
           </div>
           <div className='opcode'>
