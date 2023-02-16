@@ -77,7 +77,7 @@ class Index extends React.Component {
   copySource = () => {
     let source = this.sourceRef.current.getValue();
     let compressed = LZString.compressToEncodedURIComponent(source);
-    navigator.clipboard.writeText(window.location.host + '/#' + compressed);
+    navigator.clipboard.writeText(window.location.host + '/rox#' + compressed);
     toast("Copied!");
   }
 

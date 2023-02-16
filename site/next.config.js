@@ -1,7 +1,14 @@
 const { join } = require('node:path');
 const { access, symlink } = require('node:fs/promises');
 
+const repo = 'rox'
+const assetPrefix = `/${repo}/`
+const basePath = `/${repo}`
+
+
 module.exports = {
+  assetPrefix: assetPrefix,
+  basePath: basePath,
   webpack: function (config, { isServer }) {
     config.experiments = { asyncWebAssembly: true, syncWebAssembly: true };
     config.plugins.push(
