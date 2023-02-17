@@ -121,6 +121,7 @@ impl<'a> Scanner<'a> {
             self.advance();
         }
 
+        self.source.reset_peek();
         if self.source.peek().is_none() {
             return self.error_token("Unterminated string.");
         }
@@ -189,12 +190,7 @@ impl<'a> Iterator for Scanner<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let x = self.scan_token();
-        // if let Some(ref token) = x {
-        //     println!("{:?} => {:?}", token.kind, token.value);
-        // }
-
-        x
+        self.scan_token()
     }
 }
 
@@ -257,9 +253,9 @@ pub struct Token<'a> {
 impl<'a> Default for Token<'a> {
     fn default() -> Self {
         Token {
-            kind: TokenType::Error,
+            kind: TokenType::Eof,
             value: "",
-            line: 0,
+            line: 1,
         }
     }
 }
