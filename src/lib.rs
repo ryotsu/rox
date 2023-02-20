@@ -1,5 +1,6 @@
 pub mod chunk;
 mod compiler;
+mod gc;
 mod native;
 mod scanner;
 mod table;

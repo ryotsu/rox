@@ -1,13 +1,11 @@
-use crate::chunk::OpCode;
+use crate::chunk::{Chunk, OpCode};
 use crate::compiler::compile;
+use crate::gc::{Gc, GcRef, GcTrace, GcTraceFormatter};
 use crate::native::*;
 use crate::table::Table;
-use crate::value::{BoundMethod, Class, Closure, Instance, Native, NativeFn, Upvalue, Value};
+use crate::value::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value};
 
-use std::cell::{Ref, RefCell};
 use std::collections::hash_map::Entry;
-use std::collections::VecDeque;
-use std::rc::Rc;
 
 #[cfg(feature = "debug_trace_execution")]
 use crate::debug;
@@ -16,22 +14,23 @@ const FRAME_MAX: usize = 64;
 const STACK_MAX: usize = FRAME_MAX * 256;
 
 pub struct VM {
+    gc: Gc,
     frames: Vec<CallFrame>,
     stack: Vec<Value>,
     globals: Table,
-    open_upvalues: VecDeque<Rc<RefCell<Upvalue>>>,
-    init_string: &'static str,
+    open_upvalues: Vec<GcRef<Upvalue>>,
+    init_string: GcRef<String>,
 }
 
 #[derive(Clone)]
 struct CallFrame {
-    closure: Rc<RefCell<Closure>>,
+    closure: GcRef<Closure>,
     ip: usize,
     slot: usize,
 }
 
 impl CallFrame {
-    fn new(closure: Rc<RefCell<Closure>>, slot: usize) -> Self {
+    fn new(closure: GcRef<Closure>, slot: usize) -> Self {
         Self {
             closure,
             ip: 0,
@@ -54,7 +53,11 @@ macro_rules! binary_op {
         let value = match (a, b) {
             (Value::Number(a), Value::Number(b)) => (a + b).into(),
             (Value::String(a), Value::String(b)) => {
-                (String::with_capacity(a.len() + b.len()) + &a + &b).into()
+                let a = $self.gc.deref(a);
+                let b = $self.gc.deref(b);
+                let result = format!("{}{}", a, b);
+                let result = $self.intern(result);
+                Value::String(result)
             }
             _ => {
                 $self.runtime_error("Operands must be two numbers or two strings.");
@@ -82,32 +85,84 @@ macro_rules! binary_op {
 
 impl VM {
     pub fn new() -> Self {
+        let mut gc = Gc::new();
+        let init_string = gc.intern("init".to_string());
+
         let mut vm = Self {
+            gc,
             frames: Vec::with_capacity(FRAME_MAX),
             stack: Vec::with_capacity(STACK_MAX),
             globals: Table::new(),
-            open_upvalues: VecDeque::new(),
-            init_string: "init",
+            open_upvalues: Vec::new(),
+            init_string,
         };
 
-        vm.define_native("clock", 0, clock_native);
+        vm.define_native("clock", 0, Native(clock_native));
         vm
     }
 
     fn read_byte(&mut self) -> OpCode {
         self.current_frame_mut().ip += 1;
-        self.current_closure().function.chunk.code[self.current_frame().ip - 1]
+        self.current_chunk().code[self.current_frame().ip - 1]
     }
 
     fn read_short(&mut self) -> usize {
         self.current_frame_mut().ip += 2;
-        (self.current_closure().function.chunk.code[self.current_frame().ip - 2] as usize) << 8
-            | self.current_closure().function.chunk.code[self.current_frame().ip - 1] as usize
+        (self.current_chunk().code[self.current_frame().ip - 2] as usize) << 8
+            | self.current_chunk().code[self.current_frame().ip - 1] as usize
     }
 
     fn read_constant(&mut self) -> Value {
         let index = self.read_byte() as usize;
-        self.current_closure().function.chunk.constants[index].clone()
+        self.current_chunk().constants[index]
+    }
+
+    fn read_string(&mut self) -> GcRef<String> {
+        if let Value::String(s) = self.read_constant() {
+            s
+        } else {
+            panic!("Constant is not String");
+        }
+    }
+
+    fn alloc<T: GcTrace + 'static + std::fmt::Debug>(&mut self, object: T) -> GcRef<T> {
+        self.mark_and_sweep();
+        self.gc.alloc(object)
+    }
+
+    fn intern(&mut self, name: String) -> GcRef<String> {
+        self.mark_and_sweep();
+        self.gc.intern(name)
+    }
+
+    fn mark_and_sweep(&mut self) {
+        if self.gc.should_gc() {
+            #[cfg(feature = "debug_log_gc")]
+            println!("-- gc begin");
+
+            self.mark_roots();
+            self.gc.collect_garbage();
+
+            #[cfg(feature = "debug_log_gc")]
+            println!("-- gc end");
+        }
+    }
+
+    fn mark_roots(&mut self) {
+        for &value in &self.stack {
+            self.gc.mark_value(value);
+        }
+
+        for frame in &self.frames {
+            self.gc.mark_object(frame.closure)
+        }
+
+        for &upvalue in &self.open_upvalues {
+            self.gc.mark_object(upvalue);
+        }
+
+        self.gc.mark_table(&self.globals);
+        self.gc.mark_object(self.init_string);
     }
 
     fn push(&mut self, value: Value) {
@@ -118,16 +173,18 @@ impl VM {
         self.stack.pop().unwrap()
     }
 
-    fn peek(&self, distance: usize) -> &Value {
-        &self.stack[self.stack.len() - distance - 1]
+    fn peek(&self, distance: usize) -> Value {
+        self.stack[self.stack.len() - distance - 1]
     }
 
-    fn call(&mut self, closure: Rc<RefCell<Closure>>, arg_count: usize) -> bool {
-        if arg_count != closure.borrow().function.arity {
+    fn call(&mut self, closure_ref: GcRef<Closure>, arg_count: usize) -> bool {
+        let closure = self.gc.deref(closure_ref);
+        let function = self.gc.deref(closure.function);
+
+        if arg_count != function.arity {
             self.runtime_error(&format!(
                 "Expected {} arguments but got {}.",
-                closure.borrow().function.arity,
-                arg_count
+                function.arity, arg_count
             ));
             return false;
         }
@@ -137,7 +194,7 @@ impl VM {
             return false;
         }
 
-        let frame = CallFrame::new(closure, self.stack.len() - arg_count - 1);
+        let frame = CallFrame::new(closure_ref, self.stack.len() - arg_count - 1);
         self.frames.push(frame);
 
         true
@@ -145,16 +202,21 @@ impl VM {
 
     fn call_value(&mut self, callee: Value, arg_count: usize) -> bool {
         match callee {
-            Value::BoundMethod(bound) => {
+            Value::BoundMethod(bound_ref) => {
+                let bound = self.gc.deref(bound_ref);
                 let slot = self.stack.len() - arg_count - 1;
-                self.stack[slot] = bound.receiver.clone();
-                self.call(bound.method.clone(), arg_count)
+                self.stack[slot] = bound.receiver;
+                self.call(bound.method, arg_count)
             }
             Value::Class(class) => {
+                let instance = Instance::new(class);
+                let instance = self.alloc(instance);
                 let slot = self.stack.len() - arg_count - 1;
-                self.stack[slot] = Instance::new(class.clone()).into();
-                if let Some(Value::Closure(init)) = class.methods.borrow().get(self.init_string) {
-                    return self.call(init.clone(), arg_count);
+                self.stack[slot] = Value::Instance(instance);
+
+                let class = self.gc.deref(class);
+                if let Some(Value::Closure(init)) = class.methods.get(&self.init_string) {
+                    return self.call(*init, arg_count);
                 } else if arg_count != 0 {
                     self.runtime_error(&format!("Expected 0 arguments but got {}.", arg_count));
                     return false;
@@ -162,9 +224,9 @@ impl VM {
                 true
             }
             Value::Closure(closure) => self.call(closure, arg_count),
-            Value::Native(function) => {
+            Value::NativeFunction(function) => {
                 let offset = self.stack.len() - arg_count;
-                let value = (function.function)(arg_count, &self.stack[offset..]);
+                let value = function.0(arg_count, &self.stack[offset..]);
                 self.stack.truncate(offset - 1);
                 self.push(value);
                 true
@@ -176,75 +238,90 @@ impl VM {
         }
     }
 
-    fn invoke_from_class(&mut self, class: Rc<Class>, name: String, arg_count: usize) -> bool {
-        if let Some(Value::Closure(method)) = class.methods.borrow().get(&name) {
-            return self.call(method.clone(), arg_count);
+    fn invoke_from_class(
+        &mut self,
+        class: GcRef<Class>,
+        name: GcRef<String>,
+        arg_count: usize,
+    ) -> bool {
+        let class = self.gc.deref(class);
+        if let Some(Value::Closure(method)) = class.methods.get(&name) {
+            return self.call(*method, arg_count);
         }
 
+        let name = self.gc.deref(name);
         self.runtime_error(&format!("Undefined property '{}'.", name));
         false
     }
 
-    fn invoke(&mut self, name: String, arg_count: usize) -> bool {
-        if let Value::Instance(instance) = self.peek(arg_count).clone() {
-            if let Some(value) = instance.fields.borrow().get(&name) {
+    fn invoke(&mut self, name: GcRef<String>, arg_count: usize) -> bool {
+        if let Value::Instance(instance) = self.peek(arg_count) {
+            let instance = self.gc.deref(instance);
+            if let Some(&value) = instance.fields.get(&name) {
                 let slot = self.stack.len() - arg_count - 1;
-                self.stack[slot] = value.clone();
-                return self.call_value(value.clone(), arg_count);
+                self.stack[slot] = value;
+                return self.call_value(value, arg_count);
             }
 
-            return self.invoke_from_class(instance.class.clone(), name, arg_count);
+            return self.invoke_from_class(instance.class, name, arg_count);
         }
 
         self.runtime_error("Only instances have methods.");
         false
     }
 
-    fn bind_method(&mut self, class: Rc<Class>, name: String) -> bool {
-        if let Some(Value::Closure(method)) = class.methods.borrow().get(&name) {
-            let bound = BoundMethod::new(self.pop(), method.clone());
-            self.push(Value::BoundMethod(Rc::new(bound)));
+    fn bind_method(&mut self, class: GcRef<Class>, name: GcRef<String>) -> bool {
+        let class = self.gc.deref(class);
+        if let Some(Value::Closure(method)) = class.methods.get(&name) {
+            let bound = BoundMethod::new(self.peek(0), *method);
+            let bound = self.alloc(bound);
+            self.pop();
+            self.push(Value::BoundMethod(bound));
             return true;
         }
 
+        let name = self.gc.deref(name);
         self.runtime_error(&format!("Undefined property '{}'.", name));
         false
     }
 
-    fn capture_upvalue(&mut self, location: usize) -> Rc<RefCell<Upvalue>> {
-        for upvalue in &self.open_upvalues {
-            if upvalue.borrow().location == location {
-                return upvalue.clone();
+    fn capture_upvalue(&mut self, location: usize) -> GcRef<Upvalue> {
+        for &upvalue_ref in &self.open_upvalues {
+            let upvalue = self.gc.deref(upvalue_ref);
+            if upvalue.location == location {
+                return upvalue_ref;
             }
         }
 
         let upvalue = Upvalue::new(location);
-        let upvalue = Rc::new(RefCell::new(upvalue));
+        let upvalue = self.alloc(upvalue);
 
-        self.open_upvalues.push_front(upvalue.clone());
+        self.open_upvalues.push(upvalue);
         upvalue
     }
 
     fn close_upvalues(&mut self, last: usize) {
         let mut i = 0;
         while i != self.open_upvalues.len() {
-            let upvalue = self.open_upvalues[i].clone();
-            if upvalue.borrow().location >= last {
+            let upvalue = self.open_upvalues[i];
+            let upvalue = self.gc.deref_mut(upvalue);
+            if upvalue.location >= last {
                 self.open_upvalues.remove(i);
-                let location = upvalue.borrow().location;
-                upvalue.borrow_mut().closed = Some(self.stack[location].clone());
+                let location = upvalue.location;
+                upvalue.closed = Some(self.stack[location])
             } else {
                 i += 1;
             }
         }
     }
 
-    fn define_method(&mut self, name: String) {
-        let method = self.peek(0).clone();
-        let class: Rc<Class> = self.peek(1).clone().into();
-
-        class.methods.borrow_mut().insert(name, method);
-        self.pop();
+    fn define_method(&mut self, name: GcRef<String>) {
+        let method = self.peek(0);
+        if let Value::Class(class) = self.peek(1) {
+            let class = self.gc.deref_mut(class);
+            class.methods.insert(name, method);
+            self.pop();
+        }
     }
 
     fn reset_stack(&mut self) {
@@ -257,27 +334,31 @@ impl VM {
         eprintln!("{}", message);
 
         for frame in self.frames.iter().rev() {
-            let function = &frame.closure.borrow().function;
+            let closure = self.gc.deref(frame.closure);
+            let function = self.gc.deref(closure.function);
             let index = frame.ip - 1;
+            let name = self.gc.deref(function.name);
             eprint!("[line {}] in ", function.chunk.lines[index]);
-            if function.name.as_str() == "" {
+            if name.is_empty() {
                 eprintln!("script");
             } else {
-                eprintln!("{}", function.name);
+                eprintln!("{}", name);
             }
         }
 
         self.reset_stack();
     }
 
-    fn define_native(&mut self, name: &str, arity: usize, native: NativeFn) {
-        let function = Native {
-            name: Rc::new(name.to_string()),
-            arity,
-            function: native,
-        };
+    fn define_native(&mut self, name: &str, _arity: usize, native: Native) {
+        let name = self.gc.intern(name.to_owned());
 
-        self.globals.insert(name.into(), function.into());
+        // let function = Native {
+        //     name: Rc::new(name.to_string()),
+        //     arity,
+        //     function: native,
+        // };
+
+        self.globals.insert(name, Value::NativeFunction(native));
     }
 
     fn current_frame(&self) -> &CallFrame {
@@ -288,19 +369,27 @@ impl VM {
         self.frames.last_mut().unwrap()
     }
 
-    fn current_closure(&self) -> Ref<Closure> {
-        self.current_frame().closure.borrow()
+    fn current_closure(&self) -> &Closure {
+        let closure = self.current_frame().closure;
+        self.gc.deref(closure)
+    }
+
+    fn current_chunk(&self) -> &Chunk {
+        let closure = self.current_closure();
+        let function = self.gc.deref(closure.function);
+        &function.chunk
     }
 
     pub fn interpret(&mut self, source: &str) -> InterpretResult {
-        let function = compile(source);
+        let function = compile(source, &mut self.gc);
         if function.is_none() {
             return InterpretResult::CompileError;
         }
         let function = function.unwrap();
+        let closure = Closure::new(function);
+        let closure = self.alloc(closure);
 
-        let closure = Rc::new(Closure::new(function));
-        self.push(closure.clone().into());
+        self.push(Value::Closure(closure));
         self.frames.push(CallFrame::new(closure, 0));
 
         self.run()
@@ -336,19 +425,20 @@ impl VM {
                 }
                 OpGetLocal => {
                     let slot = self.read_byte();
-                    let value = self.stack[self.current_frame().slot + slot as usize].clone();
+                    let value = self.stack[self.current_frame().slot + slot as usize];
                     self.push(value);
                 }
                 OpSetLocal => {
                     let slot = self.read_byte();
                     let index = self.current_frame().slot + slot as usize;
-                    self.stack[index] = self.peek(0).clone();
+                    self.stack[index] = self.peek(0);
                 }
                 OpGetGlobal => {
-                    let name: String = self.read_constant().into();
+                    let name = self.read_string();
                     let value = match self.globals.get(&name) {
-                        Some(value) => value.clone(),
+                        Some(&value) => value,
                         None => {
+                            let name = self.gc.deref(name);
                             self.runtime_error(&format!("Undefined variable '{}'.", name));
                             return InterpretResult::RuntimeError;
                         }
@@ -357,16 +447,17 @@ impl VM {
                     self.push(value);
                 }
                 OpDefineGlobal => {
-                    let name = self.read_constant().into();
+                    let name = self.read_string();
                     let value = self.pop();
                     self.globals.insert(name, value);
                 }
                 OpSetGlobal => {
-                    let name: String = self.read_constant().into();
-                    let value = self.peek(0).clone();
-                    if let Entry::Occupied(mut e) = self.globals.entry(name.clone()) {
+                    let name = self.read_string();
+                    let value = self.peek(0);
+                    if let Entry::Occupied(mut e) = self.globals.entry(name) {
                         e.insert(value);
                     } else {
+                        let name = self.gc.deref(name);
                         self.runtime_error(&format!("Undefined variable '{}'.", name));
                         return InterpretResult::RuntimeError;
                     }
@@ -375,11 +466,12 @@ impl VM {
                     let slot = self.read_byte();
                     let value = {
                         let current_closure = self.current_closure();
-                        let upvalue = current_closure.upvalues[slot as usize].borrow();
+                        let upvalue = current_closure.upvalues[slot as usize];
+                        let upvalue = self.gc.deref(upvalue);
                         if let Some(value) = &upvalue.closed {
-                            value.clone()
+                            *value
                         } else {
-                            self.stack[upvalue.location].clone()
+                            self.stack[upvalue.location]
                         }
                     };
 
@@ -387,11 +479,12 @@ impl VM {
                 }
                 OpSetUpvalue => {
                     let slot = self.read_byte();
-                    let value = self.peek(0).clone();
+                    let value = self.peek(0);
                     let mut change_stack = None;
                     {
                         let current_closure = self.current_closure();
-                        let mut upvalue = current_closure.upvalues[slot as usize].borrow_mut();
+                        let upvalue = current_closure.upvalues[slot as usize];
+                        let upvalue = self.gc.deref_mut(upvalue);
                         if upvalue.closed.is_none() {
                             change_stack = Some((upvalue.location, value));
                         } else {
@@ -404,46 +497,46 @@ impl VM {
                     }
                 }
                 OpGetProperty => {
-                    if let Value::Instance(_) = self.peek(0) {
+                    if let Value::Instance(instance) = self.peek(0) {
+                        let name = self.read_string();
+                        let instance = self.gc.deref(instance);
+                        let class = instance.class;
+                        if let Some(&value) = instance.fields.get(&name) {
+                            self.pop();
+                            self.push(value);
+                            continue;
+                        }
+
+                        if !self.bind_method(class, name) {
+                            return InterpretResult::RuntimeError;
+                        }
                     } else {
                         self.runtime_error("Only instances have properties.");
-                        return InterpretResult::RuntimeError;
-                    }
-
-                    let instance: Rc<Instance> = self.peek(0).clone().into();
-                    let name: String = self.read_constant().into();
-                    if let Some(value) = instance.fields.borrow().get(&name) {
-                        self.pop();
-                        self.push(value.clone());
-                        continue;
-                    }
-
-                    if !self.bind_method(instance.class.clone(), name) {
                         return InterpretResult::RuntimeError;
                     }
                 }
 
                 OpSetProperty => {
-                    if let Value::Instance(_) = self.peek(1) {
+                    if let Value::Instance(instance) = self.peek(1) {
+                        let name = self.read_string();
+                        let value = self.pop();
+                        let instance = self.gc.deref_mut(instance);
+                        instance.fields.insert(name, value);
+                        self.pop();
+                        self.push(value);
                     } else {
                         self.runtime_error("Only instances have fields.");
                         return InterpretResult::RuntimeError;
                     }
-
-                    let instance: Rc<Instance> = self.peek(1).clone().into();
-                    let name: String = self.read_constant().into();
-                    let value = self.peek(0).clone();
-                    instance.fields.borrow_mut().insert(name, value);
-                    let value = self.pop();
-                    self.pop();
-                    self.push(value);
                 }
                 OpGetSuper => {
-                    let name: String = self.read_constant().into();
-                    let superclass = self.pop().into();
-
-                    if !self.bind_method(superclass, name) {
-                        return InterpretResult::RuntimeError;
+                    let name = self.read_string();
+                    if let Value::Class(superclass) = self.pop() {
+                        if !self.bind_method(superclass, name) {
+                            return InterpretResult::RuntimeError;
+                        }
+                    } else {
+                        panic!("super found no class");
                     }
                 }
                 OpEqual => {
@@ -469,7 +562,11 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpPrint => println!("{}", self.pop()),
+                OpPrint => {
+                    let value = self.pop();
+                    let formatter = GcTraceFormatter::new(value, &self.gc);
+                    println!("{}", formatter);
+                }
                 OpJump => {
                     let offset = self.read_short();
                     self.current_frame_mut().ip += offset;
@@ -486,13 +583,13 @@ impl VM {
                 }
                 OpCall => {
                     let arg_count = self.read_byte();
-                    let value = self.peek(arg_count as usize).clone();
+                    let value = self.peek(arg_count as usize);
                     if !self.call_value(value, arg_count as usize) {
                         return InterpretResult::RuntimeError;
                     }
                 }
                 OpInvoke => {
-                    let method: String = self.read_constant().into();
+                    let method = self.read_string();
                     let arg_count = self.read_byte() as usize;
                     if !self.invoke(method, arg_count) {
                         return InterpretResult::RuntimeError;
@@ -500,19 +597,24 @@ impl VM {
                     *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
                 }
                 OpSuperInvoke => {
-                    let method = self.read_constant().into();
+                    let method = self.read_string();
                     let arg_count = self.read_byte() as usize;
-                    let superclass = self.pop().into();
 
-                    if !self.invoke_from_class(superclass, method, arg_count) {
-                        return InterpretResult::RuntimeError;
+                    if let Value::Class(superclass) = self.pop() {
+                        if !self.invoke_from_class(superclass, method, arg_count) {
+                            return InterpretResult::RuntimeError;
+                        }
+                    } else {
+                        panic!("super invoke with no class");
                     }
 
                     *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
                 }
                 OpClosure => {
                     if let Value::Closure(closure) = self.read_constant() {
-                        let length = closure.borrow().function.upvalues.len();
+                        let closure = self.gc.deref(closure);
+                        let function = closure.function;
+                        let length = self.gc.deref(closure.function).upvalues.len();
                         let mut upvalues = vec![];
                         for _ in 0..length {
                             let is_local = self.read_byte() as u8;
@@ -522,17 +624,16 @@ impl VM {
                                 let upvalue_index = self.current_frame().slot + index;
                                 self.capture_upvalue(upvalue_index)
                             } else {
-                                self.current_closure().upvalues[index].clone()
+                                self.current_closure().upvalues[index]
                             };
                             upvalues.push(upvalue);
                         }
 
-                        let closure = Rc::new(RefCell::new(Closure {
-                            function: closure.borrow().function.clone(),
-                            upvalues,
-                        }));
+                        let closure = Closure { function, upvalues };
 
-                        self.push(closure.into());
+                        let closure = self.alloc(closure);
+
+                        self.push(Value::Closure(closure));
                     }
                 }
                 OpCloseUpvalue => {
@@ -554,17 +655,18 @@ impl VM {
                     self.push(value);
                 }
                 OpClass => {
-                    let name = self.read_constant().into();
+                    let name = self.read_string();
                     let class = Class::new(name);
-                    self.push(class.into());
+                    let class = self.alloc(class);
+                    self.push(Value::Class(class));
                 }
                 OpInherit => {
                     if let Value::Class(superclass) = self.peek(1) {
+                        let superclass = self.gc.deref(superclass);
+                        let methods = superclass.methods.clone();
                         if let Value::Class(subclass) = self.peek(0) {
-                            subclass
-                                .methods
-                                .borrow_mut()
-                                .extend(superclass.methods.clone().into_inner());
+                            let subclass = self.gc.deref_mut(subclass);
+                            subclass.methods.extend(methods);
                             self.pop();
                         }
                     } else {
@@ -573,7 +675,7 @@ impl VM {
                     }
                 }
                 OpMethod => {
-                    let name: String = self.read_constant().into();
+                    let name = self.read_string();
                     self.define_method(name)
                 }
             }

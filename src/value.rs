@@ -1,101 +1,166 @@
-use std::cell::RefCell;
 use std::fmt::{Debug, Display};
-use std::rc::Rc;
+use std::mem;
 
-use crate::chunk::Chunk;
+use crate::chunk::{Chunk, OpCode};
+use crate::gc::{GcRef, GcTrace};
 use crate::table::Table;
 
-#[derive(Clone)]
+impl GcTrace for String {
+    fn format(&self, f: &mut std::fmt::Formatter, _gc: &crate::gc::Gc) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<String>() + self.as_bytes().len()
+    }
+
+    fn trace(&self, _gc: &mut crate::gc::Gc) {}
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Value {
     Nil,
     Bool(bool),
     Number(f64),
-    String(Rc<String>),
-    Native(Rc<Native>),
-    Closure(Rc<RefCell<Closure>>),
-    Class(Rc<Class>),
-    Instance(Rc<Instance>),
-    BoundMethod(Rc<BoundMethod>),
+    String(GcRef<String>),
+    NativeFunction(Native),
+    Closure(GcRef<Closure>),
+    Class(GcRef<Class>),
+    Instance(GcRef<Instance>),
+    BoundMethod(GcRef<BoundMethod>),
 }
 
-#[derive(Clone, PartialEq)]
-pub struct Function {
-    pub arity: usize,
-    pub chunk: Chunk,
-    pub name: Rc<String>,
-    pub upvalues: Vec<FnUpvalue>,
+impl Value {
+    pub fn is_falsey(&self) -> bool {
+        matches!(self, Value::Nil | Value::Bool(false))
+    }
 }
 
-pub type NativeFn = fn(usize, &[Value]) -> Value;
+impl GcTrace for Value {
+    fn format(&self, f: &mut std::fmt::Formatter, gc: &crate::gc::Gc) -> std::fmt::Result {
+        match self {
+            Value::Bool(value) => write!(f, "{}", value),
+            Value::BoundMethod(value) => gc.deref(*value).format(f, gc),
+            Value::Class(value) => gc.deref(*value).format(f, gc),
+            Value::Closure(value) => gc.deref(*value).format(f, gc),
+            Value::Instance(value) => gc.deref(*value).format(f, gc),
+            Value::NativeFunction(_) => write!(f, "<native fn>"),
+            Value::Nil => write!(f, "nil"),
+            Value::Number(value) => write!(f, "{}", value),
+            Value::String(value) => gc.deref(*value).format(f, gc),
+        }
+    }
 
-pub struct Native {
-    pub arity: usize,
-    pub name: Rc<String>,
-    pub function: NativeFn,
+    fn size(&self) -> usize {
+        0
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        match self {
+            Value::BoundMethod(value) => gc.mark_object(*value),
+            Value::Class(value) => gc.mark_object(*value),
+            Value::Closure(value) => gc.mark_object(*value),
+            Value::Instance(value) => gc.mark_object(*value),
+            Value::String(value) => gc.mark_object(*value),
+            _ => (),
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        panic!("Value should not be allocated")
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        panic!("Value should not be allocated")
+    }
 }
 
-#[derive(PartialEq)]
-pub struct Closure {
-    pub function: Function,
-    pub upvalues: Vec<Rc<RefCell<Upvalue>>>,
-}
-
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FnUpvalue {
     pub index: u8,
     pub is_local: bool,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Debug)]
+pub struct Function {
+    pub arity: usize,
+    pub chunk: Chunk,
+    pub name: GcRef<String>,
+    pub upvalues: Vec<FnUpvalue>,
+}
+
+impl Function {
+    pub fn new(name: GcRef<String>) -> Self {
+        Self {
+            chunk: Chunk::new(),
+            arity: 0,
+            upvalues: Vec::new(),
+            name,
+        }
+    }
+}
+
+impl GcTrace for Function {
+    fn format(&self, f: &mut std::fmt::Formatter, gc: &crate::gc::Gc) -> std::fmt::Result {
+        let name = gc.deref(self.name);
+        if name.is_empty() {
+            write!(f, "<script>")
+        } else {
+            write!(f, "<fn {}>", name)
+        }
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<Function>()
+            + self.upvalues.capacity() * mem::size_of::<FnUpvalue>()
+            + self.chunk.code.capacity() * mem::size_of::<OpCode>()
+            + self.chunk.constants.capacity() * mem::size_of::<Value>()
+            + self.chunk.constants.capacity() * mem::size_of::<usize>()
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        gc.mark_object(self.name);
+        for &constant in &self.chunk.constants {
+            gc.mark_value(constant);
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Native(pub fn(usize, &[Value]) -> Value);
+
+impl PartialEq for Native {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl Debug for Native {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<native fn>")
+    }
+}
+
+#[derive(Debug)]
 pub struct Upvalue {
     pub location: usize,
     pub closed: Option<Value>,
-}
-
-pub struct Class {
-    pub name: Rc<String>,
-    pub methods: RefCell<Table>,
-}
-
-pub struct Instance {
-    pub class: Rc<Class>,
-    pub fields: RefCell<Table>,
-}
-
-#[derive(PartialEq)]
-pub struct BoundMethod {
-    pub receiver: Value,
-    pub method: Rc<RefCell<Closure>>,
-}
-
-impl Instance {
-    pub fn new(class: Rc<Class>) -> Self {
-        Self {
-            class,
-            fields: RefCell::new(Table::new()),
-        }
-    }
-}
-
-impl Display for Instance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} instance", self.class)
-    }
-}
-
-impl Class {
-    pub fn new(name: Rc<String>) -> Self {
-        Class {
-            name,
-            methods: RefCell::new(Table::new()),
-        }
-    }
-}
-
-impl Display for Class {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
-    }
 }
 
 impl Upvalue {
@@ -107,98 +172,259 @@ impl Upvalue {
     }
 }
 
-impl Closure {
-    pub fn new(function: Function) -> RefCell<Closure> {
-        RefCell::new(Self {
-            upvalues: Vec::with_capacity(function.upvalues.len()),
-            function,
-        })
+impl GcTrace for Upvalue {
+    fn format(&self, f: &mut std::fmt::Formatter, _gc: &crate::gc::Gc) -> std::fmt::Result {
+        write!(f, "upvalue")
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        if let Some(obj) = self.closed {
+            gc.mark_value(obj)
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
-impl Function {
-    pub fn new(name: Rc<String>) -> Self {
+#[derive(Debug)]
+pub struct Closure {
+    pub function: GcRef<Function>,
+    pub upvalues: Vec<GcRef<Upvalue>>,
+}
+
+impl Closure {
+    pub fn new(function: GcRef<Function>) -> Self {
         Self {
-            chunk: Chunk::new(),
-            arity: 0,
             upvalues: Vec::new(),
-            name,
+            function,
         }
     }
 }
 
+impl GcTrace for Closure {
+    fn format(&self, f: &mut std::fmt::Formatter, gc: &crate::gc::Gc) -> std::fmt::Result {
+        let function = gc.deref(self.function);
+        function.format(f, gc)
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<Self>() + self.upvalues.capacity() * mem::size_of::<GcRef<Upvalue>>()
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        gc.mark_object(self.function);
+        for &upvalue in &self.upvalues {
+            gc.mark_object(upvalue);
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct Class {
+    pub name: GcRef<String>,
+    pub methods: Table,
+}
+
+impl Class {
+    pub fn new(name: GcRef<String>) -> Self {
+        Class {
+            name,
+            methods: Table::new(),
+        }
+    }
+}
+
+impl GcTrace for Class {
+    fn format(&self, f: &mut std::fmt::Formatter, gc: &crate::gc::Gc) -> std::fmt::Result {
+        let name = gc.deref(self.name);
+        write!(f, "{}", name)
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        gc.mark_object(self.name);
+        gc.mark_table(&self.methods);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct Instance {
+    pub class: GcRef<Class>,
+    pub fields: Table,
+}
+
+impl Instance {
+    pub fn new(class: GcRef<Class>) -> Self {
+        Self {
+            class,
+            fields: Table::new(),
+        }
+    }
+}
+
+impl GcTrace for Instance {
+    fn format(&self, f: &mut std::fmt::Formatter, gc: &crate::gc::Gc) -> std::fmt::Result {
+        let class = gc.deref(self.class);
+        let name = gc.deref(class.name);
+        write!(f, "{} instance", name)
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+            + self.fields.capacity() * (mem::size_of::<GcRef<String>>() + mem::size_of::<Value>())
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        gc.mark_object(self.class);
+        gc.mark_table(&self.fields);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct BoundMethod {
+    pub receiver: Value,
+    pub method: GcRef<Closure>,
+}
+
 impl BoundMethod {
-    pub fn new(receiver: Value, method: Rc<RefCell<Closure>>) -> Self {
+    pub fn new(receiver: Value, method: GcRef<Closure>) -> Self {
         Self { receiver, method }
     }
 }
 
-impl Default for Function {
-    fn default() -> Self {
-        Self::new(Rc::new(String::from("script")))
+impl GcTrace for BoundMethod {
+    fn format(&self, f: &mut std::fmt::Formatter, gc: &crate::gc::Gc) -> std::fmt::Result {
+        let method = gc.deref(self.method);
+        method.format(f, gc)
+    }
+
+    fn size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+
+    fn trace(&self, gc: &mut crate::gc::Gc) {
+        gc.mark_object(self.method);
+        gc.mark_value(self.receiver);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
-impl Display for Native {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<native fn>")
-    }
-}
+// impl Display for Instance {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{} instance", self.class)
+//     }
+// }
 
-impl Display for Function {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.name.as_str() != "" {
-            write!(f, "<fn {}>", self.name)
-        } else {
-            write!(f, "<script>")
-        }
-    }
-}
+// impl Display for Class {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self.name)
+//     }
+// }
 
-impl Display for BoundMethod {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.method.borrow().function)
-    }
-}
+// impl Default for Function {
+//     fn default() -> Self {
+//         Self::new(Rc::new(String::from("script")))
+//     }
+// }
 
-impl Value {
-    pub fn is_falsey(&self) -> bool {
-        matches!(self, Value::Nil | Value::Bool(false))
-    }
-}
+// impl Display for NativeFn {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "<native fn>")
+//     }
+// }
 
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Bool(a), Self::Bool(b)) => a == b,
-            (Self::Number(a), Self::Number(b)) => a == b,
-            (Self::String(a), Self::String(b)) => a == b,
-            (Self::Native(a), Self::Native(b)) => a.name == b.name,
-            (Self::Closure(a), Self::Closure(b)) => Rc::eq(a, b),
-            (Self::Class(a), Self::Class(b)) => a.name == b.name,
-            (Self::BoundMethod(a), Self::BoundMethod(b)) => std::ptr::eq(&a.method, &b.method),
-            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-        }
-    }
-}
+// impl Display for Function {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         if self.name.as_str() != "" {
+//             write!(f, "<fn {}>", self.name)
+//         } else {
+//             write!(f, "<script>")
+//         }
+//     }
+// }
 
-impl Debug for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Value::*;
+// impl Display for BoundMethod {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self.method.borrow().function)
+//     }
+// }
 
-        match self {
-            Nil => write!(f, "nil"),
-            Bool(val) => write!(f, "{}", val),
-            Number(val) => write!(f, "{}", val),
-            String(val) => write!(f, "{}", val),
-            Native(val) => write!(f, "{}", val),
-            Closure(val) => write!(f, "{}", val.borrow().function),
-            Class(val) => write!(f, "{}", val),
-            Instance(val) => write!(f, "{}", val),
-            BoundMethod(val) => write!(f, "{}", val),
-        }
-    }
-}
+// impl PartialEq for Value {
+//     fn eq(&self, other: &Self) -> bool {
+//         match (self, other) {
+//             (Self::Bool(a), Self::Bool(b)) => a == b,
+//             (Self::Number(a), Self::Number(b)) => a == b,
+//             (Self::String(a), Self::String(b)) => a == b,
+//             (Self::Native(a), Self::Native(b)) => a.name == b.name,
+//             (Self::Closure(a), Self::Closure(b)) => Rc::eq(a, b),
+//             (Self::Class(a), Self::Class(b)) => a.name == b.name,
+//             (Self::BoundMethod(a), Self::BoundMethod(b)) => std::ptr::eq(&a.method, &b.method),
+//             _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+//         }
+//     }
+// }
+
+// impl Debug for Value {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         use Value::*;
+
+//         match self {
+//             Nil => write!(f, "nil"),
+//             Bool(val) => write!(f, "{}", val),
+//             Number(val) => write!(f, "{}", val),
+//             String(val) => write!(f, "{}", val),
+//             Native(val) => write!(f, "{}", val),
+//             Closure(val) => write!(f, "{}", val.borrow().function),
+//             Class(val) => write!(f, "{}", val),
+//             Instance(val) => write!(f, "{}", val),
+//             BoundMethod(val) => write!(f, "{}", val),
+//         }
+//     }
+// }
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -224,80 +450,32 @@ impl From<f64> for Value {
     }
 }
 
-impl From<String> for Value {
-    fn from(s: String) -> Self {
-        Self::String(Rc::new(s))
-    }
-}
+// impl From<String> for Value {
+//     fn from(s: String) -> Self {
+//         Self::String(Rc::new(s))
+//     }
+// }
 
-impl From<Class> for Value {
-    fn from(c: Class) -> Self {
-        Value::Class(Rc::new(c))
-    }
-}
+// impl From<Class> for Value {
+//     fn from(c: Class) -> Self {
+//         Value::Class(Rc::new(c))
+//     }
+// }
 
-impl From<Instance> for Value {
-    fn from(i: Instance) -> Self {
-        Value::Instance(Rc::new(i))
-    }
-}
+// impl From<Instance> for Value {
+//     fn from(i: Instance) -> Self {
+//         Value::Instance(Rc::new(i))
+//     }
+// }
 
-impl From<Function> for Value {
-    fn from(f: Function) -> Self {
-        Value::Closure(Rc::new(Closure::new(f)))
-    }
-}
+// impl From<Function> for Value {
+//     fn from(f: Function) -> Self {
+//         Value::Closure(Rc::new(Closure::new(f)))
+//     }
+// }
 
-impl From<Native> for Value {
-    fn from(f: Native) -> Self {
-        Value::Native(Rc::new(f))
-    }
-}
-
-impl From<&str> for Value {
-    fn from(s: &str) -> Self {
-        Self::String(Rc::new(String::from(s)))
-    }
-}
-
-impl From<Rc<RefCell<Closure>>> for Value {
-    fn from(c: Rc<RefCell<Closure>>) -> Self {
-        Value::Closure(c)
-    }
-}
-
-impl From<Value> for Rc<Instance> {
-    fn from(v: Value) -> Self {
-        match v {
-            Value::Instance(i) => i,
-            _ => unimplemented!(),
-        }
-    }
-}
-
-impl From<Value> for Rc<Class> {
-    fn from(v: Value) -> Self {
-        match v {
-            Value::Class(c) => c,
-            _ => unimplemented!(),
-        }
-    }
-}
-
-impl From<Value> for String {
-    fn from(value: Value) -> Self {
-        match value {
-            Value::String(s) => s.to_string(),
-            _ => unimplemented!(),
-        }
-    }
-}
-
-impl From<Value> for Rc<String> {
-    fn from(value: Value) -> Self {
-        match value {
-            Value::String(s) => s,
-            _ => unimplemented!(),
-        }
-    }
-}
+// impl From<Native> for Value {
+//     fn from(f: Native) -> Self {
+//         Value::Native(Rc::new(f))
+//     }
+// }

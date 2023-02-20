@@ -1,3 +1,3 @@
-use crate::value::Value;
+use crate::{gc::GcRef, value::Value};
 
-pub type Table = std::collections::HashMap<String, Value>;
+pub type Table = std::collections::HashMap<GcRef<String>, Value>;

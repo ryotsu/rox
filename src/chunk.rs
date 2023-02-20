@@ -5,7 +5,7 @@ use crate::debug::disassemble_chunk;
 
 use std::mem;
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 #[repr(u8)]
 pub enum OpCode {
     OpConstant,
@@ -53,7 +53,7 @@ impl From<u8> for OpCode {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Chunk {
     pub code: Vec<OpCode>,
     pub constants: Vec<Value>,

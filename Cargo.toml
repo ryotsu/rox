@@ -13,6 +13,7 @@ repository = "https://github.com/ryotsu/rox"
 itertools = "0.10.2"
 
 [features]
-default = ["debug_trace_execution", "debug_print_code"]
+# default = ["debug_trace_execution", "debug_print_code"]
+default = []
 debug_trace_execution = []
 debug_print_code = []

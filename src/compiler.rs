@@ -1,11 +1,12 @@
 use crate::chunk::{Chunk, OpCode};
+use crate::gc::{Gc, GcRef};
 use crate::scanner::{Scanner, Token, TokenType};
-use crate::value::{FnUpvalue, Function, Value};
+use crate::value::{Closure, FnUpvalue, Function, Value};
 
 use std::mem;
-use std::rc::Rc;
 
 pub struct Parser<'a> {
+    gc: &'a mut Gc,
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
@@ -59,12 +60,12 @@ impl ClassCompiler {
 enum FunctionType {
     Function,
     Method,
-    TypeInitializer,
+    Initializer,
     Script,
 }
 
 impl<'a> Compiler<'a> {
-    fn new(ftype: FunctionType, name: Rc<String>) -> Box<Self> {
+    fn new(ftype: FunctionType, name: GcRef<String>) -> Box<Self> {
         let mut compiler = Self {
             enclosing: None,
             locals: Vec::new(),
@@ -144,12 +145,15 @@ impl<'a> Compiler<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, gc: &'a mut Gc) -> Self {
+        let function_name = gc.intern("script".to_owned());
+
         Self {
+            gc,
             scanner: Scanner::from(source),
             previous: Token::default(),
             current: Token::default(),
-            compiler: Compiler::new(FunctionType::Script, Rc::new(String::from("script"))),
+            compiler: Compiler::new(FunctionType::Script, function_name),
             current_class: None,
             had_error: false,
             panic_mode: false,
@@ -157,24 +161,26 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn compile(&mut self) -> Option<Function> {
+    fn compile(mut self) -> Option<GcRef<Function>> {
         self.advance();
 
         while !self.matches(TokenType::Eof) {
             self.declaration();
         }
 
-        let function = self.pop_compiler();
+        //let function = self.pop_compiler();
+        self.emit_return();
         if self.had_error {
             None
         } else {
+            let function = self.gc.alloc(self.compiler.function);
             Some(function)
         }
     }
 
     fn push_compiler(&mut self, ftype: FunctionType) {
-        let name = self.previous.value.to_string();
-        let new_compiler = Compiler::new(ftype, Rc::new(name));
+        let name = self.gc.intern(self.previous.value.to_owned());
+        let new_compiler = Compiler::new(ftype, name);
         let old_compiler = mem::replace(&mut self.compiler, new_compiler);
         self.compiler.enclosing = Some(old_compiler);
     }
@@ -187,7 +193,7 @@ impl<'a> Parser<'a> {
                 let compiler = mem::replace(&mut self.compiler, enclosing);
                 compiler.function
             }
-            None => mem::take(&mut self.compiler.function),
+            None => panic!("No enclosing compiler for script"),
         };
 
         #[cfg(feature = "debug_print_code")]
@@ -275,7 +281,7 @@ impl<'a> Parser<'a> {
     }
 
     fn emit_return(&mut self) {
-        if self.compiler.function_type == FunctionType::TypeInitializer {
+        if self.compiler.function_type == FunctionType::Initializer {
             self.emit_bytes(OpCode::OpGetLocal, 0);
         } else {
             self.emit_byte(OpCode::OpNil);
@@ -356,7 +362,7 @@ impl<'a> Parser<'a> {
         if self.matches(TokenType::Semicolon) {
             self.emit_return();
         } else {
-            if self.compiler.function_type == FunctionType::TypeInitializer {
+            if self.compiler.function_type == FunctionType::Initializer {
                 self.error("Can't return a value from an initializer.");
             }
 
@@ -526,11 +532,15 @@ impl<'a> Parser<'a> {
         self.block();
 
         let function = self.pop_compiler();
+        let upvalues = function.upvalues.clone();
+        let function_id = self.gc.alloc(function);
+        let closure = Closure::new(function_id);
+        let closure_id = self.gc.alloc(closure);
 
-        let index = self.make_constant(function.clone().into());
+        let index = self.make_constant(Value::Closure(closure_id));
         self.emit_bytes(OpCode::OpClosure, index);
 
-        for upvalue in function.upvalues {
+        for upvalue in upvalues {
             self.emit_byte(upvalue.is_local as u8);
             self.emit_byte(upvalue.index);
         }
@@ -540,7 +550,7 @@ impl<'a> Parser<'a> {
         self.consume(TokenType::Identifier, "Expect method name.");
         let constant = self.identifier_constant(self.previous.value);
         let ftype = if self.previous.value == "init" {
-            FunctionType::TypeInitializer
+            FunctionType::Initializer
         } else {
             FunctionType::Method
         };
@@ -631,7 +641,8 @@ impl<'a> Parser<'a> {
     }
 
     fn string(&mut self, _can_assign: bool) {
-        self.emit_constant(self.previous.value.into());
+        let s = self.gc.intern(self.previous.value.to_owned());
+        self.emit_constant(Value::String(s));
     }
 
     fn named_variable(&mut self, name: &str, can_assign: bool) {
@@ -857,8 +868,8 @@ impl<'a> Parser<'a> {
     }
 
     fn identifier_constant(&mut self, name: &str) -> u8 {
-        let value = name.into();
-        self.make_constant(value)
+        let identifier = self.gc.intern(name.to_owned());
+        self.make_constant(Value::String(identifier))
     }
 
     fn resolve_local(&mut self, name: &str) -> Option<u8> {
@@ -1047,7 +1058,7 @@ impl<'a> ParseRule<'a> {
     }
 }
 
-pub fn compile(source: &str) -> Option<Function> {
-    let mut parser = Parser::new(source);
+pub fn compile(source: &str, gc: &mut Gc) -> Option<GcRef<Function>> {
+    let parser = Parser::new(source, gc);
     parser.compile()
 }
