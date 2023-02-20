@@ -108,21 +108,8 @@ impl VM {
 
     fn read_short(&mut self) -> usize {
         self.current_frame_mut().ip += 2;
-        (self.current_chunk().code[self.current_frame().ip - 2] as usize) << 8
-            | self.current_chunk().code[self.current_frame().ip - 1] as usize
-    }
-
-    fn read_constant(&mut self) -> Value {
-        let index = self.read_byte() as usize;
-        self.current_chunk().constants[index]
-    }
-
-    fn read_string(&mut self) -> GcRef<String> {
-        if let Value::String(s) = self.read_constant() {
-            s
-        } else {
-            panic!("Constant is not String");
-        }
+        usize::from(self.current_chunk().code[self.current_frame().ip - 2]) << 8
+            | usize::from(self.current_chunk().code[self.current_frame().ip - 1])
     }
 
     fn alloc<T: GcTrace + 'static + std::fmt::Debug>(&mut self, object: T) -> GcRef<T> {
@@ -413,9 +400,9 @@ impl VM {
 
             let instruction = self.read_byte();
             match instruction {
-                OpConstant => {
-                    let constant = self.read_constant();
-                    self.push(constant);
+                OpConstant(constant) => {
+                    let value = self.current_chunk().read_constant(constant);
+                    self.push(value);
                 }
                 OpNil => self.push(Value::Nil),
                 OpTrue => self.push(true.into()),
@@ -423,18 +410,16 @@ impl VM {
                 OpPop => {
                     self.pop();
                 }
-                OpGetLocal => {
-                    let slot = self.read_byte();
+                OpGetLocal(slot) => {
                     let value = self.stack[self.current_frame().slot + slot as usize];
                     self.push(value);
                 }
-                OpSetLocal => {
-                    let slot = self.read_byte();
+                OpSetLocal(slot) => {
                     let index = self.current_frame().slot + slot as usize;
                     self.stack[index] = self.peek(0);
                 }
-                OpGetGlobal => {
-                    let name = self.read_string();
+                OpGetGlobal(index) => {
+                    let name = self.current_chunk().read_string(index);
                     let value = match self.globals.get(&name) {
                         Some(&value) => value,
                         None => {
@@ -446,13 +431,13 @@ impl VM {
 
                     self.push(value);
                 }
-                OpDefineGlobal => {
-                    let name = self.read_string();
+                OpDefineGlobal(index) => {
+                    let name = self.current_chunk().read_string(index);
                     let value = self.pop();
                     self.globals.insert(name, value);
                 }
-                OpSetGlobal => {
-                    let name = self.read_string();
+                OpSetGlobal(index) => {
+                    let name = self.current_chunk().read_string(index);
                     let value = self.peek(0);
                     if let Entry::Occupied(mut e) = self.globals.entry(name) {
                         e.insert(value);
@@ -462,8 +447,7 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpGetUpvalue => {
-                    let slot = self.read_byte();
+                OpGetUpvalue(slot) => {
                     let value = {
                         let current_closure = self.current_closure();
                         let upvalue = current_closure.upvalues[slot as usize];
@@ -477,8 +461,7 @@ impl VM {
 
                     self.push(value)
                 }
-                OpSetUpvalue => {
-                    let slot = self.read_byte();
+                OpSetUpvalue(slot) => {
                     let value = self.peek(0);
                     let mut change_stack = None;
                     {
@@ -496,9 +479,9 @@ impl VM {
                         self.stack[location] = value;
                     }
                 }
-                OpGetProperty => {
+                OpGetProperty(index) => {
                     if let Value::Instance(instance) = self.peek(0) {
-                        let name = self.read_string();
+                        let name = self.current_chunk().read_string(index);
                         let instance = self.gc.deref(instance);
                         let class = instance.class;
                         if let Some(&value) = instance.fields.get(&name) {
@@ -516,9 +499,9 @@ impl VM {
                     }
                 }
 
-                OpSetProperty => {
+                OpSetProperty(index) => {
                     if let Value::Instance(instance) = self.peek(1) {
-                        let name = self.read_string();
+                        let name = self.current_chunk().read_string(index);
                         let value = self.pop();
                         let instance = self.gc.deref_mut(instance);
                         instance.fields.insert(name, value);
@@ -529,8 +512,8 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpGetSuper => {
-                    let name = self.read_string();
+                OpGetSuper(index) => {
+                    let name = self.current_chunk().read_string(index);
                     if let Value::Class(superclass) = self.pop() {
                         if !self.bind_method(superclass, name) {
                             return InterpretResult::RuntimeError;
@@ -567,41 +550,34 @@ impl VM {
                     let formatter = GcTraceFormatter::new(value, &self.gc);
                     println!("{}", formatter);
                 }
-                OpJump => {
-                    let offset = self.read_short();
-                    self.current_frame_mut().ip += offset;
+                OpJump(offset) => {
+                    self.current_frame_mut().ip += offset as usize;
                 }
-                OpJumpIfFalse => {
-                    let offset = self.read_short();
+                OpJumpIfFalse(offset) => {
                     if self.peek(0).is_falsey() {
-                        self.current_frame_mut().ip += offset;
+                        self.current_frame_mut().ip += offset as usize;
                     }
                 }
-                OpLoop => {
-                    let offset = self.read_short();
-                    self.current_frame_mut().ip -= offset;
+                OpLoop(offset) => {
+                    self.current_frame_mut().ip -= offset as usize + 1;
                 }
-                OpCall => {
-                    let arg_count = self.read_byte();
+                OpCall(arg_count) => {
                     let value = self.peek(arg_count as usize);
                     if !self.call_value(value, arg_count as usize) {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpInvoke => {
-                    let method = self.read_string();
-                    let arg_count = self.read_byte() as usize;
-                    if !self.invoke(method, arg_count) {
+                OpInvoke(name, arg_count) => {
+                    let method = self.current_chunk().read_string(name);
+                    if !self.invoke(method, arg_count as usize) {
                         return InterpretResult::RuntimeError;
                     }
                     *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
                 }
-                OpSuperInvoke => {
-                    let method = self.read_string();
-                    let arg_count = self.read_byte() as usize;
-
+                OpSuperInvoke(name, arg_count) => {
+                    let method = self.current_chunk().read_string(name);
                     if let Value::Class(superclass) = self.pop() {
-                        if !self.invoke_from_class(superclass, method, arg_count) {
+                        if !self.invoke_from_class(superclass, method, arg_count as usize) {
                             return InterpretResult::RuntimeError;
                         }
                     } else {
@@ -610,15 +586,15 @@ impl VM {
 
                     *self.current_frame_mut() = self.frames[self.frames.len() - 1].clone();
                 }
-                OpClosure => {
-                    if let Value::Closure(closure) = self.read_constant() {
+                OpClosure(index) => {
+                    if let Value::Closure(closure) = self.current_chunk().read_constant(index) {
                         let closure = self.gc.deref(closure);
                         let function = closure.function;
                         let length = self.gc.deref(closure.function).upvalues.len();
                         let mut upvalues = vec![];
                         for _ in 0..length {
-                            let is_local = self.read_byte() as u8;
-                            let index = self.read_byte() as usize;
+                            let is_local = u8::from(self.read_byte());
+                            let index = usize::from(self.read_byte());
 
                             let upvalue = if is_local == 1 {
                                 let upvalue_index = self.current_frame().slot + index;
@@ -654,8 +630,8 @@ impl VM {
                     self.stack.truncate(slot);
                     self.push(value);
                 }
-                OpClass => {
-                    let name = self.read_string();
+                OpClass(index) => {
+                    let name = self.current_chunk().read_string(index);
                     let class = Class::new(name);
                     let class = self.alloc(class);
                     self.push(Value::Class(class));
@@ -674,8 +650,8 @@ impl VM {
                         return InterpretResult::RuntimeError;
                     }
                 }
-                OpMethod => {
-                    let name = self.read_string();
+                OpMethod(index) => {
+                    let name = self.current_chunk().read_string(index);
                     self.define_method(name)
                 }
             }

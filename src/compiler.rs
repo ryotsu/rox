@@ -250,39 +250,32 @@ impl<'a> Parser<'a> {
         &mut self.compiler.function.chunk
     }
 
-    fn emit_byte<T: Into<OpCode>>(&mut self, op_code: T) {
+    fn chunk(&self) -> &Chunk {
+        &self.compiler.function.chunk
+    }
+
+    fn emit_byte<T: Into<OpCode>>(&mut self, op_code: T) -> usize {
         let line = self.previous.line;
         self.chunk_mut().write(op_code, line)
     }
 
-    fn emit_bytes<T: Into<OpCode>, U: Into<OpCode>>(&mut self, op_code1: T, op_code2: U) {
+    fn emit_bytes<T: Into<OpCode>, U: Into<OpCode>>(&mut self, op_code1: T, op_code2: U) -> usize {
         self.emit_byte(op_code1);
-        self.emit_byte(op_code2);
-    }
-
-    fn emit_jump<T: Into<OpCode>>(&mut self, op_code: T) -> usize {
-        self.emit_byte(op_code);
-        self.emit_byte(0xff);
-        self.emit_byte(0xff);
-
-        self.chunk_mut().code.len() - 2
+        self.emit_byte(op_code2)
     }
 
     fn emit_loop(&mut self, loop_start: usize) {
-        self.emit_byte(OpCode::OpLoop);
-
-        let offset = self.chunk_mut().code.len() - loop_start + 2;
+        let offset = self.chunk().code.len() - loop_start;
         if offset > u16::MAX as usize {
             self.error("Loop body too large.");
         }
 
-        self.emit_byte(((offset >> 8) & 0xff) as u8);
-        self.emit_byte((offset & 0xff) as u8);
+        self.emit_byte(OpCode::OpLoop(offset as u16));
     }
 
     fn emit_return(&mut self) {
         if self.compiler.function_type == FunctionType::Initializer {
-            self.emit_bytes(OpCode::OpGetLocal, 0);
+            self.emit_byte(OpCode::OpGetLocal(0));
         } else {
             self.emit_byte(OpCode::OpNil);
         }
@@ -292,7 +285,7 @@ impl<'a> Parser<'a> {
 
     fn emit_constant(&mut self, value: Value) {
         let index = self.make_constant(value);
-        self.emit_bytes(OpCode::OpConstant, index)
+        self.emit_byte(OpCode::OpConstant(index));
     }
 
     fn make_constant(&mut self, value: Value) -> u8 {
@@ -308,14 +301,17 @@ impl<'a> Parser<'a> {
     }
 
     fn patch_jump(&mut self, offset: usize) {
-        let jump = self.chunk_mut().code.len() - offset - 2;
+        let jump = self.chunk().code.len() - offset - 1;
 
         if jump > u16::MAX as usize {
             self.error("Too much code to jump over.");
         }
 
-        self.chunk_mut().code[offset] = (((jump >> 8) & 0xff) as u8).into();
-        self.chunk_mut().code[offset + 1] = ((jump & 0xff) as u8).into();
+        match self.chunk_mut().code[offset] {
+            OpCode::OpJump(ref mut o) => *o = jump as u16,
+            OpCode::OpJumpIfFalse(ref mut o) => *o = jump as u16,
+            _ => panic!("Instruction at position is not jump"),
+        }
     }
 
     fn expression(&mut self) {
@@ -384,18 +380,18 @@ impl<'a> Parser<'a> {
             self.expression_statement();
         }
 
-        let mut loop_start = self.chunk_mut().code.len();
+        let mut loop_start = self.chunk().code.len();
         let mut exit_jump = usize::MAX;
         if !self.matches(TokenType::Semicolon) {
             self.expression();
             self.consume(TokenType::Semicolon, "Expect ';' after loop condition.");
 
-            exit_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+            exit_jump = self.emit_byte(OpCode::OpJumpIfFalse(0xffff));
             self.emit_byte(OpCode::OpPop);
         }
 
         if !self.matches(TokenType::RightParen) {
-            let body_jump = self.emit_jump(OpCode::OpJump);
+            let body_jump = self.emit_byte(OpCode::OpJump(0xffff));
             let increment_start = self.chunk_mut().code.len();
 
             self.expression();
@@ -423,12 +419,12 @@ impl<'a> Parser<'a> {
         self.expression();
         self.consume(TokenType::RightParen, "Expect ')' after condition.");
 
-        let then_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+        let then_jump = self.emit_byte(OpCode::OpJumpIfFalse(0xffff));
         self.emit_byte(OpCode::OpPop);
 
         self.statement();
 
-        let else_jump = self.emit_jump(OpCode::OpJump);
+        let else_jump = self.emit_byte(OpCode::OpJump(0xffff));
 
         self.patch_jump(then_jump);
         self.emit_byte(OpCode::OpPop);
@@ -447,7 +443,7 @@ impl<'a> Parser<'a> {
         self.expression();
         self.consume(TokenType::RightParen, "Expect ')' after condition.");
 
-        let exit_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+        let exit_jump = self.emit_byte(OpCode::OpJumpIfFalse(0xffff));
         self.emit_byte(OpCode::OpPop);
 
         self.statement();
@@ -538,11 +534,11 @@ impl<'a> Parser<'a> {
         let closure_id = self.gc.alloc(closure);
 
         let index = self.make_constant(Value::Closure(closure_id));
-        self.emit_bytes(OpCode::OpClosure, index);
+        self.emit_byte(OpCode::OpClosure(index));
 
         for upvalue in upvalues {
-            self.emit_byte(upvalue.is_local as u8);
-            self.emit_byte(upvalue.index);
+            self.emit_byte(upvalue.is_local as u64);
+            self.emit_byte(upvalue.index as u64);
         }
     }
 
@@ -556,7 +552,7 @@ impl<'a> Parser<'a> {
         };
 
         self.function(ftype);
-        self.emit_bytes(OpCode::OpMethod, constant);
+        self.emit_byte(OpCode::OpMethod(constant));
     }
 
     fn class_declaration(&mut self) {
@@ -565,7 +561,7 @@ impl<'a> Parser<'a> {
         let name_const = self.identifier_constant(self.previous.value);
         self.declare_variable();
 
-        self.emit_bytes(OpCode::OpClass, name_const);
+        self.emit_byte(OpCode::OpClass(name_const));
         self.define_variable(name_const);
 
         let mut class_compiler = ClassCompiler::new();
@@ -649,25 +645,23 @@ impl<'a> Parser<'a> {
         let get_op;
         let set_op;
 
-        let arg = if let Some(arg) = self.resolve_local(name) {
-            get_op = OpCode::OpGetLocal;
-            set_op = OpCode::OpSetLocal;
-            arg
+        if let Some(arg) = self.resolve_local(name) {
+            get_op = OpCode::OpGetLocal(arg);
+            set_op = OpCode::OpSetLocal(arg);
         } else if let Some(arg) = self.resolve_upvalue(name) {
-            get_op = OpCode::OpGetUpvalue;
-            set_op = OpCode::OpSetUpvalue;
-            arg
+            get_op = OpCode::OpGetUpvalue(arg);
+            set_op = OpCode::OpSetUpvalue(arg);
         } else {
-            get_op = OpCode::OpGetGlobal;
-            set_op = OpCode::OpSetGlobal;
-            self.identifier_constant(name)
+            let index = self.identifier_constant(name);
+            get_op = OpCode::OpGetGlobal(index);
+            set_op = OpCode::OpSetGlobal(index);
         };
 
         if can_assign && self.matches(TokenType::Equal) {
             self.expression();
-            self.emit_bytes(set_op, arg);
+            self.emit_byte(set_op);
         } else {
-            self.emit_bytes(get_op, arg);
+            self.emit_byte(get_op);
         }
     }
 
@@ -694,11 +688,10 @@ impl<'a> Parser<'a> {
         if self.matches(TokenType::LeftParen) {
             let arg_count = self.argument_list();
             self.named_variable("super", false);
-            self.emit_bytes(OpCode::OpSuperInvoke, name);
-            self.emit_byte(arg_count);
+            self.emit_byte(OpCode::OpSuperInvoke(name, arg_count));
         } else {
             self.named_variable("super", false);
-            self.emit_bytes(OpCode::OpGetSuper, name);
+            self.emit_byte(OpCode::OpGetSuper(name));
         }
     }
 
@@ -720,7 +713,7 @@ impl<'a> Parser<'a> {
             TokenType::Bang => self.emit_byte(OpCode::OpNot),
             TokenType::Minus => self.emit_byte(OpCode::OpNegate),
             _ => unreachable!(),
-        }
+        };
     }
 
     fn binary(&mut self, _can_assign: bool) {
@@ -744,7 +737,7 @@ impl<'a> Parser<'a> {
             Star => self.emit_byte(OpMultiply),
             Slash => self.emit_byte(OpDivide),
             _ => unreachable!(),
-        }
+        };
     }
 
     fn literal(&mut self, _can_assign: bool) {
@@ -753,12 +746,12 @@ impl<'a> Parser<'a> {
             TokenType::Nil => self.emit_byte(OpCode::OpNil),
             TokenType::True => self.emit_byte(OpCode::OpTrue),
             _ => unreachable!(),
-        }
+        };
     }
 
     fn call(&mut self, _can_assign: bool) {
         let arg_count = self.argument_list();
-        self.emit_bytes(OpCode::OpCall, arg_count);
+        self.emit_byte(OpCode::OpCall(arg_count));
     }
 
     fn dot(&mut self, can_assign: bool) {
@@ -767,13 +760,12 @@ impl<'a> Parser<'a> {
 
         if can_assign && self.matches(TokenType::Equal) {
             self.expression();
-            self.emit_bytes(OpCode::OpSetProperty, name);
+            self.emit_byte(OpCode::OpSetProperty(name));
         } else if self.matches(TokenType::LeftParen) {
             let arg_count = self.argument_list();
-            self.emit_bytes(OpCode::OpInvoke, name);
-            self.emit_byte(arg_count);
+            self.emit_byte(OpCode::OpInvoke(name, arg_count));
         } else {
-            self.emit_bytes(OpCode::OpGetProperty, name);
+            self.emit_byte(OpCode::OpGetProperty(name));
         }
     }
 
@@ -805,7 +797,7 @@ impl<'a> Parser<'a> {
             return;
         }
 
-        self.emit_bytes(OpCode::OpDefineGlobal, global);
+        self.emit_byte(OpCode::OpDefineGlobal(global));
     }
 
     fn argument_list(&mut self) -> u8 {
@@ -828,7 +820,7 @@ impl<'a> Parser<'a> {
     }
 
     fn and(&mut self, _can_assign: bool) {
-        let end_jump = self.emit_jump(OpCode::OpJumpIfFalse);
+        let end_jump = self.emit_byte(OpCode::OpJumpIfFalse(0xffff));
 
         self.emit_byte(OpCode::OpPop);
         self.parse_precedence(Precedence::And);
@@ -837,8 +829,8 @@ impl<'a> Parser<'a> {
     }
 
     fn or(&mut self, _can_assign: bool) {
-        let else_jump = self.emit_jump(OpCode::OpJumpIfFalse);
-        let end_jump = self.emit_jump(OpCode::OpJump);
+        let else_jump = self.emit_byte(OpCode::OpJumpIfFalse(0xffff));
+        let end_jump = self.emit_byte(OpCode::OpJump(0xffff));
 
         self.patch_jump(else_jump);
         self.emit_byte(OpCode::OpPop);

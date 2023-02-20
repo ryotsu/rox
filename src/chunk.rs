@@ -1,4 +1,4 @@
-use crate::value::Value;
+use crate::{gc::GcRef, value::Value};
 
 #[cfg(feature = "debug_print_code")]
 use crate::debug::disassemble_chunk;
@@ -6,23 +6,23 @@ use crate::debug::disassemble_chunk;
 use std::mem;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
-#[repr(u8)]
+#[repr(u32)]
 pub enum OpCode {
-    OpConstant,
+    OpConstant(u8),
     OpNil,
     OpTrue,
     OpFalse,
     OpPop,
-    OpGetLocal,
-    OpSetLocal,
-    OpGetGlobal,
-    OpDefineGlobal,
-    OpSetGlobal,
-    OpGetUpvalue,
-    OpSetUpvalue,
-    OpGetProperty,
-    OpSetProperty,
-    OpGetSuper,
+    OpGetLocal(u8),
+    OpSetLocal(u8),
+    OpGetGlobal(u8),
+    OpDefineGlobal(u8),
+    OpSetGlobal(u8),
+    OpGetUpvalue(u8),
+    OpSetUpvalue(u8),
+    OpGetProperty(u8),
+    OpSetProperty(u8),
+    OpGetSuper(u8),
     OpEqual,
     OpGreater,
     OpLess,
@@ -33,23 +33,35 @@ pub enum OpCode {
     OpNot,
     OpNegate,
     OpPrint,
-    OpJump,
-    OpJumpIfFalse,
-    OpLoop,
-    OpCall,
-    OpInvoke,
-    OpSuperInvoke,
-    OpClosure,
+    OpJump(u16),
+    OpJumpIfFalse(u16),
+    OpLoop(u16),
+    OpCall(u8),
+    OpInvoke(u8, u8),
+    OpSuperInvoke(u8, u8),
+    OpClosure(u8),
     OpCloseUpvalue,
     OpReturn,
-    OpClass,
+    OpClass(u8),
     OpInherit,
-    OpMethod,
+    OpMethod(u8),
 }
 
-impl From<u8> for OpCode {
-    fn from(value: u8) -> Self {
+impl From<u64> for OpCode {
+    fn from(value: u64) -> Self {
         unsafe { mem::transmute(value) }
+    }
+}
+
+impl From<OpCode> for usize {
+    fn from(value: OpCode) -> Self {
+        unsafe { mem::transmute(value) }
+    }
+}
+
+impl From<OpCode> for u8 {
+    fn from(value: OpCode) -> Self {
+        usize::from(value) as u8
     }
 }
 
@@ -69,9 +81,10 @@ impl Chunk {
         }
     }
 
-    pub fn write<T: Into<OpCode>>(&mut self, op_code: T, line: u32) {
+    pub fn write<T: Into<OpCode>>(&mut self, op_code: T, line: u32) -> usize {
         self.code.push(op_code.into());
         self.lines.push(line);
+        self.code.len() - 1
     }
 
     pub fn add_constant(&mut self, value: Value) -> usize {
@@ -81,9 +94,20 @@ impl Chunk {
 
     pub fn write_constant(&mut self, value: Value, line: u32) -> usize {
         let index = self.add_constant(value);
-        self.write(OpCode::OpConstant, line);
-        self.write(index as u8, line);
+        self.write(OpCode::OpConstant(index as u8), line);
         index
+    }
+
+    pub fn read_constant(&self, index: u8) -> Value {
+        self.constants[index as usize]
+    }
+
+    pub fn read_string(&self, index: u8) -> GcRef<String> {
+        if let Value::String(s) = self.read_constant(index) {
+            s
+        } else {
+            panic!("Constant is not String");
+        }
     }
 
     #[cfg(feature = "debug_print_code")]
