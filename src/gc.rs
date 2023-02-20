@@ -268,3 +268,9 @@ impl Gc {
         strings.retain(|_k, v| objects[v.index].as_ref().unwrap().is_marked);
     }
 }
+
+impl Default for Gc {
+    fn default() -> Self {
+        Self::new()
+    }
+}

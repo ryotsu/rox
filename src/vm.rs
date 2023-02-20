@@ -106,12 +106,6 @@ impl VM {
         self.current_chunk().code[self.current_frame().ip - 1]
     }
 
-    fn read_short(&mut self) -> usize {
-        self.current_frame_mut().ip += 2;
-        usize::from(self.current_chunk().code[self.current_frame().ip - 2]) << 8
-            | usize::from(self.current_chunk().code[self.current_frame().ip - 1])
-    }
-
     fn alloc<T: GcTrace + 'static + std::fmt::Debug>(&mut self, object: T) -> GcRef<T> {
         self.mark_and_sweep();
         self.gc.alloc(object)
@@ -592,23 +586,20 @@ impl VM {
                         let function = closure.function;
                         let length = self.gc.deref(closure.function).upvalues.len();
                         let mut upvalues = vec![];
-                        for _ in 0..length {
-                            let is_local = u8::from(self.read_byte());
-                            let index = usize::from(self.read_byte());
-
-                            let upvalue = if is_local == 1 {
-                                let upvalue_index = self.current_frame().slot + index;
-                                self.capture_upvalue(upvalue_index)
+                        for i in 0..length {
+                            let upvalue = self.gc.deref(function).upvalues[i];
+                            let obj_upvalue = if upvalue.is_local {
+                                let location = self.current_frame().slot + upvalue.index as usize;
+                                self.capture_upvalue(location)
                             } else {
-                                self.current_closure().upvalues[index]
+                                self.current_closure().upvalues[upvalue.index as usize]
                             };
-                            upvalues.push(upvalue);
+
+                            upvalues.push(obj_upvalue);
                         }
 
                         let closure = Closure { function, upvalues };
-
                         let closure = self.alloc(closure);
-
                         self.push(Value::Closure(closure));
                     }
                 }

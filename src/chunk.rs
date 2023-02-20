@@ -3,10 +3,7 @@ use crate::{gc::GcRef, value::Value};
 #[cfg(feature = "debug_print_code")]
 use crate::debug::disassemble_chunk;
 
-use std::mem;
-
-#[derive(Copy, Clone, PartialEq, Debug)]
-#[repr(u32)]
+#[derive(Copy, Clone, Debug)]
 pub enum OpCode {
     OpConstant(u8),
     OpNil,
@@ -47,25 +44,7 @@ pub enum OpCode {
     OpMethod(u8),
 }
 
-impl From<u64> for OpCode {
-    fn from(value: u64) -> Self {
-        unsafe { mem::transmute(value) }
-    }
-}
-
-impl From<OpCode> for usize {
-    fn from(value: OpCode) -> Self {
-        unsafe { mem::transmute(value) }
-    }
-}
-
-impl From<OpCode> for u8 {
-    fn from(value: OpCode) -> Self {
-        usize::from(value) as u8
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Debug)]
 pub struct Chunk {
     pub code: Vec<OpCode>,
     pub constants: Vec<Value>,

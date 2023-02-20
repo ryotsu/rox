@@ -528,18 +528,12 @@ impl<'a> Parser<'a> {
         self.block();
 
         let function = self.pop_compiler();
-        let upvalues = function.upvalues.clone();
         let function_id = self.gc.alloc(function);
         let closure = Closure::new(function_id);
         let closure_id = self.gc.alloc(closure);
 
         let index = self.make_constant(Value::Closure(closure_id));
         self.emit_byte(OpCode::OpClosure(index));
-
-        for upvalue in upvalues {
-            self.emit_byte(upvalue.is_local as u64);
-            self.emit_byte(upvalue.index as u64);
-        }
     }
 
     fn method(&mut self) {
