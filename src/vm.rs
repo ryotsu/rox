@@ -333,12 +333,6 @@ impl VM {
     fn define_native(&mut self, name: &str, _arity: usize, native: Native) {
         let name = self.gc.intern(name.to_owned());
 
-        // let function = Native {
-        //     name: Rc::new(name.to_string()),
-        //     arity,
-        //     function: native,
-        // };
-
         self.globals.insert(name, Value::NativeFunction(native));
     }
 

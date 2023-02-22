@@ -34,39 +34,37 @@ impl<'a> Disassembler<'a> {
 
         let instruction = self.chunk.code[offset];
         match instruction {
-            OpConstant(c) => self.constant_instruction("OP_CONSTANT", offset, c),
-            OpNil => self.simple_instruction("OP_NIL", offset),
-            OpTrue => self.simple_instruction("OP_TRUE", offset),
-            OpFalse => self.simple_instruction("OP_FALSE", offset),
-            OpPop => self.simple_instruction("OP_POP", offset),
-            OpGetLocal(slot) => self.byte_instruction("OP_GET_LOCAL", offset, slot),
-            OpSetLocal(slot) => self.byte_instruction("OP_SET_LOCAL", offset, slot),
-            OpGetGlobal(c) => self.constant_instruction("OP_GET_GLOBAL", offset, c),
-            OpDefineGlobal(constant) => {
-                self.constant_instruction("OP_DEFINE_GLOBAL", offset, constant)
-            }
-            OpSetGlobal(c) => self.constant_instruction("OP_SET_GLOBAL", offset, c),
-            OpGetUpvalue(slot) => self.byte_instruction("OP_GET_UPVALUE", offset, slot),
-            OpSetUpvalue(slot) => self.byte_instruction("OP_SET_UPVALUE", offset, slot),
-            OpGetProperty(c) => self.constant_instruction("OP_GET_PROPERTY", offset, c),
-            OpSetProperty(c) => self.constant_instruction("OP_SET_PROPERTY", offset, c),
-            OpGetSuper(c) => self.constant_instruction("OP_GET_SUPER", offset, c),
-            OpEqual => self.simple_instruction("OP_EQUAL", offset),
-            OpGreater => self.simple_instruction("OP_GREATER", offset),
-            OpLess => self.simple_instruction("OP_LESS", offset),
-            OpAdd => self.simple_instruction("OP_ADD", offset),
-            OpSubtract => self.simple_instruction("OP_SUBTRACT", offset),
-            OpMultiply => self.simple_instruction("OP_MULTIPLY", offset),
-            OpDivide => self.simple_instruction("OP_DIVIDE", offset),
-            OpNot => self.simple_instruction("OP_NOT", offset),
-            OpNegate => self.simple_instruction("OP_NEGATE", offset),
-            OpPrint => self.simple_instruction("OP_PRINT", offset),
+            OpConstant(c) => self.constant_instruction("OP_CONSTANT", c),
+            OpNil => self.simple_instruction("OP_NIL"),
+            OpTrue => self.simple_instruction("OP_TRUE"),
+            OpFalse => self.simple_instruction("OP_FALSE"),
+            OpPop => self.simple_instruction("OP_POP"),
+            OpGetLocal(slot) => self.byte_instruction("OP_GET_LOCAL", slot),
+            OpSetLocal(slot) => self.byte_instruction("OP_SET_LOCAL", slot),
+            OpGetGlobal(c) => self.constant_instruction("OP_GET_GLOBAL", c),
+            OpDefineGlobal(constant) => self.constant_instruction("OP_DEFINE_GLOBAL", constant),
+            OpSetGlobal(c) => self.constant_instruction("OP_SET_GLOBAL", c),
+            OpGetUpvalue(slot) => self.byte_instruction("OP_GET_UPVALUE", slot),
+            OpSetUpvalue(slot) => self.byte_instruction("OP_SET_UPVALUE", slot),
+            OpGetProperty(c) => self.constant_instruction("OP_GET_PROPERTY", c),
+            OpSetProperty(c) => self.constant_instruction("OP_SET_PROPERTY", c),
+            OpGetSuper(c) => self.constant_instruction("OP_GET_SUPER", c),
+            OpEqual => self.simple_instruction("OP_EQUAL"),
+            OpGreater => self.simple_instruction("OP_GREATER"),
+            OpLess => self.simple_instruction("OP_LESS"),
+            OpAdd => self.simple_instruction("OP_ADD"),
+            OpSubtract => self.simple_instruction("OP_SUBTRACT"),
+            OpMultiply => self.simple_instruction("OP_MULTIPLY"),
+            OpDivide => self.simple_instruction("OP_DIVIDE"),
+            OpNot => self.simple_instruction("OP_NOT"),
+            OpNegate => self.simple_instruction("OP_NEGATE"),
+            OpPrint => self.simple_instruction("OP_PRINT"),
             OpJump(jump) => self.jump_instruction("OP_JUMP", 1, offset, jump),
             OpJumpIfFalse(jump) => self.jump_instruction("OP_JUMP_IF_FALSE", 1, offset, jump),
             OpLoop(jump) => self.jump_instruction("OP_LOOP", -1, offset, jump),
-            OpCall(slot) => self.byte_instruction("OP_CALL", offset, slot),
-            OpInvoke(c, args) => self.invoke_instruction("OP_INVOKE", offset, c, args),
-            OpSuperInvoke(c, args) => self.invoke_instruction("OP_SUPER_INVOKE", offset, c, args),
+            OpCall(slot) => self.byte_instruction("OP_CALL", slot),
+            OpInvoke(c, args) => self.invoke_instruction("OP_INVOKE", c, args),
+            OpSuperInvoke(c, args) => self.invoke_instruction("OP_SUPER_INVOKE", c, args),
             OpClosure(constant) => {
                 let value = self.chunk.constants[constant as usize];
                 println!(
@@ -84,23 +82,22 @@ impl<'a> Disassembler<'a> {
                         println!("{:04}      | {:>20}{} {}", "", " ", is_local, upvalue.index);
                     }
                 }
-
-                offset + 1
             }
-            OpCloseUpvalue => self.simple_instruction("OP_CLOSE_UPVALUE", offset),
-            OpReturn => self.simple_instruction("OP_RETURN", offset),
-            OpClass(c) => self.constant_instruction("OP_CLASS", offset, c),
-            OpInherit => self.simple_instruction("OP_INHERIT", offset),
-            OpMethod(c) => self.constant_instruction("OP_METHOD", offset, c),
+            OpCloseUpvalue => self.simple_instruction("OP_CLOSE_UPVALUE"),
+            OpReturn => self.simple_instruction("OP_RETURN"),
+            OpClass(c) => self.constant_instruction("OP_CLASS", c),
+            OpInherit => self.simple_instruction("OP_INHERIT"),
+            OpMethod(c) => self.constant_instruction("OP_METHOD", c),
         }
-    }
 
-    fn simple_instruction(&self, name: &str, offset: usize) -> usize {
-        println!("{}", name);
         offset + 1
     }
 
-    fn constant_instruction(&self, name: &str, offset: usize, constant: u8) -> usize {
+    fn simple_instruction(&self, name: &str) {
+        println!("{}", name);
+    }
+
+    fn constant_instruction(&self, name: &str, constant: u8) {
         let value = self.chunk.constants[constant as usize];
         println!(
             "{:<16} {:4} '{}'",
@@ -108,10 +105,9 @@ impl<'a> Disassembler<'a> {
             constant,
             GcTraceFormatter::new(value, self.gc)
         );
-        offset + 1
     }
 
-    fn invoke_instruction(&self, name: &str, offset: usize, constant: u8, arg_count: u8) -> usize {
+    fn invoke_instruction(&self, name: &str, constant: u8, arg_count: u8) {
         let value = self.chunk.constants[constant as usize];
         println!(
             "{:<16} ({} args) {:4} '{}'",
@@ -120,21 +116,18 @@ impl<'a> Disassembler<'a> {
             constant,
             GcTraceFormatter::new(value, self.gc)
         );
-        offset + 1
     }
 
-    fn byte_instruction(&self, name: &str, offset: usize, slot: u8) -> usize {
+    fn byte_instruction(&self, name: &str, slot: u8) {
         println!("{:<16} {:4}", name, slot);
-        offset + 1
     }
 
-    fn jump_instruction(&self, name: &str, sign: isize, offset: usize, jump: u16) -> usize {
+    fn jump_instruction(&self, name: &str, sign: isize, offset: usize, jump: u16) {
         println!(
             "{:<16} {:4} -> {}",
             name,
             offset,
             offset as isize + 1 + sign * jump as isize
         );
-        offset + 1
     }
 }
