@@ -3,6 +3,9 @@ use crate::gc::{Gc, GcRef};
 use crate::scanner::{Scanner, Token, TokenType};
 use crate::value::{Closure, FnUpvalue, Function, Value};
 
+#[cfg(feature = "debug_print_code")]
+use crate::debug::Disassembler;
+
 use std::mem;
 
 pub struct Parser<'a> {
@@ -168,7 +171,6 @@ impl<'a> Parser<'a> {
             self.declaration();
         }
 
-        //let function = self.pop_compiler();
         self.emit_return();
         if self.had_error {
             None
@@ -198,13 +200,8 @@ impl<'a> Parser<'a> {
 
         #[cfg(feature = "debug_print_code")]
         if !self.had_error {
-            let name = if function.name.as_str() != "" {
-                function.name.as_str()
-            } else {
-                "<script>"
-            };
-
-            function.chunk.disassemble(name);
+            let disassmebler = Disassembler::new(self.gc, &function.chunk);
+            disassmebler.disassemble_chunk(function.name);
             println!();
         }
 

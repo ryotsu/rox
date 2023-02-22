@@ -8,7 +8,7 @@ use crate::value::{BoundMethod, Class, Closure, Instance, Native, Upvalue, Value
 use std::collections::hash_map::Entry;
 
 #[cfg(feature = "debug_trace_execution")]
-use crate::debug;
+use crate::debug::Disassembler;
 
 const FRAME_MAX: usize = 64;
 const STACK_MAX: usize = FRAME_MAX * 256;
@@ -383,13 +383,14 @@ impl VM {
             #[cfg(feature = "debug_trace_execution")]
             {
                 print!("          ");
-                for value in &self.stack {
-                    print!("[ {} ]", value)
+                for &value in &self.stack {
+                    print!("[ {} ]", GcTraceFormatter::new(value, &self.gc))
                 }
                 println!();
 
                 let ip = self.current_frame().ip;
-                debug::disassemble_instruction(&self.current_closure().function.chunk, ip);
+                let disassembler = Disassembler::new(&self.gc, self.current_chunk());
+                disassembler.disassemble_instruction(ip);
             }
 
             let instruction = self.read_byte();

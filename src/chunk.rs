@@ -1,8 +1,5 @@
 use crate::{gc::GcRef, value::Value};
 
-#[cfg(feature = "debug_print_code")]
-use crate::debug::disassemble_chunk;
-
 #[derive(Copy, Clone, Debug)]
 pub enum OpCode {
     OpConstant(u8),
@@ -87,11 +84,6 @@ impl Chunk {
         } else {
             panic!("Constant is not String");
         }
-    }
-
-    #[cfg(feature = "debug_print_code")]
-    pub fn disassemble(&self, name: &str) {
-        disassemble_chunk(self, name)
     }
 }
 
