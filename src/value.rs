@@ -25,8 +25,9 @@ impl GcTrace for String {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub enum Value {
+    #[default]
     Nil,
     Bool(bool),
     Number(f64),
@@ -356,12 +357,6 @@ impl GcTrace for BoundMethod {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         <&Value as std::fmt::Debug>::fmt(&self, f)
-    }
-}
-
-impl Default for Value {
-    fn default() -> Self {
-        Value::Nil
     }
 }
 

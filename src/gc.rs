@@ -96,11 +96,7 @@ impl Gc {
 
     pub fn alloc<T: GcTrace + 'static + Debug>(&mut self, object: T) -> GcRef<T> {
         #[cfg(feature = "debug_log_gc")]
-        let repr = format!("{:?}", object)
-            .chars()
-            .into_iter()
-            .take(32)
-            .collect::<String>();
+        let repr = format!("{:?}", object).chars().take(32).collect::<String>();
         let size = object.size() + mem::size_of::<GcObjectHeader>();
         self.bytes_allocated += size;
         let entry = GcObjectHeader {
