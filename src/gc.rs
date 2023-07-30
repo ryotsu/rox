@@ -248,7 +248,7 @@ impl Gc {
 
     fn sweep(&mut self) {
         for i in 0..self.objects.len() {
-            if let Some(mut object) = self.objects[i].as_mut() {
+            if let Some(object) = self.objects[i].as_mut() {
                 if object.is_marked {
                     object.is_marked = false;
                 } else {
