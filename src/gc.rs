@@ -1,7 +1,9 @@
-use std::{any::type_name, collections::VecDeque, marker::PhantomData, mem};
-use std::{any::Any, collections::HashMap, fmt, hash};
+// GC implementation taken from https://github.com/ceronman/loxido
 
-use fmt::Debug;
+use std::any::{type_name, Any};
+use std::collections::{HashMap, VecDeque};
+use std::marker::PhantomData;
+use std::{fmt, hash, mem};
 
 use crate::table::Table;
 use crate::value::Value;
@@ -45,7 +47,7 @@ impl<T: GcTrace> Clone for GcRef<T> {
     }
 }
 
-impl<T: GcTrace> Debug for GcRef<T> {
+impl<T: GcTrace> fmt::Debug for GcRef<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let full_name = type_name::<T>();
         full_name.split("::").last().unwrap();
@@ -94,7 +96,7 @@ impl Gc {
         }
     }
 
-    pub fn alloc<T: GcTrace + 'static + Debug>(&mut self, object: T) -> GcRef<T> {
+    pub fn alloc<T: GcTrace + 'static + fmt::Debug>(&mut self, object: T) -> GcRef<T> {
         #[cfg(feature = "debug_log_gc")]
         let repr = format!("{:?}", object).chars().take(32).collect::<String>();
         let size = object.size() + mem::size_of::<GcObjectHeader>();
@@ -199,7 +201,6 @@ impl Gc {
         #[cfg(feature = "debug_log_gc")]
         println!("blacken(id:{})", index);
 
-        // Hack to trick the borrow checker to be able to call trace on an element.
         let object = self.objects[index].take();
         object.as_ref().unwrap().obj.trace(self);
         self.objects[index] = object;
