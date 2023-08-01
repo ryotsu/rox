@@ -1,10 +1,13 @@
 # Rox
 
-Lox programming language from [crafting interpreters](https://www.craftinginterpreters.com/) written in Rust.
+Lox programming language from [Crafting Interpreters](https://www.craftinginterpreters.com/) written in Rust.
+
+You can check out the live playground [here](https://ryotsu.github.com/rox/).
 
 ## Build
 
-By default it prints the debug opcodes and traces execution. You can build it without those features:
+By default it prints the debug opcodes, traces execution and logs gc. You can build it without those features:
+
 `$ cargo build --release --no-default-features`
 
 ## Run
